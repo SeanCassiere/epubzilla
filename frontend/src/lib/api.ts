@@ -9,6 +9,8 @@ import type { Book } from "@bindings/Book";
 import type { ChapterContent } from "@bindings/ChapterContent";
 import type { ContentFormat } from "@bindings/ContentFormat";
 import type { CoreError } from "@bindings/CoreError";
+import type { Metadata } from "@bindings/Metadata";
+import type { ValidationIssue } from "@bindings/ValidationIssue";
 
 const CORE_ERROR_KINDS: ReadonlySet<string> = new Set([
   "Io",
@@ -71,6 +73,63 @@ export async function readResource(
 /** Drop session state for one book. Unsaved-changes confirmation is on us. */
 export function closeBook(bookId: string): Promise<void> {
   return invoke<void>("close_book", { bookId });
+}
+
+/** New in-memory EPUB 3 book (generated title page + nav); `source` is null. */
+export function createBook(metadata: Metadata): Promise<Book> {
+  return invoke<Book>("create_book", { metadata });
+}
+
+/**
+ * Atomic save. `path` is required when the book has no `source` (save-as);
+ * omit it to save in place. Untouched entries are copied, not re-encoded.
+ */
+export function saveBook(bookId: string, path?: string): Promise<Book> {
+  return invoke<Book>("save_book", { bookId, path: path ?? null });
+}
+
+/** Write one chapter body (Markdown is converted to XHTML on write). */
+export function writeChapter(
+  bookId: string,
+  resourceId: string,
+  content: ChapterContent,
+): Promise<Book> {
+  return invoke<Book>("write_chapter", { bookId, resourceId, content });
+}
+
+/** Replace book metadata; a generated title page is regenerated. */
+export function updateMetadata(
+  bookId: string,
+  metadata: Metadata,
+): Promise<Book> {
+  return invoke<Book>("update_metadata", { bookId, metadata });
+}
+
+/** Add a chapter after the given spine item (or at the end). */
+export function addChapter(
+  bookId: string,
+  title: string,
+  after?: string,
+): Promise<Book> {
+  return invoke<Book>("add_chapter", { bookId, title, after: after ?? null });
+}
+
+/** Remove a spine entry, its nav entries, and its resource if unreferenced. */
+export function removeChapter(
+  bookId: string,
+  spineItemId: string,
+): Promise<Book> {
+  return invoke<Book>("remove_chapter", { bookId, spineItemId });
+}
+
+/** Reorder the spine; `order` must be a permutation of current spine ids. */
+export function reorderSpine(bookId: string, order: string[]): Promise<Book> {
+  return invoke<Book>("reorder_spine", { bookId, order });
+}
+
+/** Native validation subset (ADR-0003). Findings are values, not rejections. */
+export function validateBook(bookId: string): Promise<ValidationIssue[]> {
+  return invoke<ValidationIssue[]>("validate", { bookId });
 }
 
 /**
