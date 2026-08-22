@@ -27,7 +27,7 @@ book data: it holds `BookId`s and re-fetches.
 |---|---|---|---|
 | `get_book` | `book_id` | `Book` | Current model snapshot. |
 | `read_chapter` | `book_id, resource_id, prefer: ContentFormat` | `ChapterContent` | `prefer: Markdown` converts per `content-roundtrip.md`; returns `format: Xhtml` when conversion would be lossy. |
-| `read_resource` | `book_id, resource_id` | `ResourcePayload` | For images/CSS/fonts. Delivered as bytes or a servable URI (implementation detail of the Tauri asset protocol; decided in M1). |
+| `read_resource` | `book_id, resource_id` | `ResourcePayload` | For images/CSS/fonts. Returns raw bytes over IPC. Resources are additionally served over the `epub://` asset protocol as `epub://<book_id>/<zip-internal path>` with the manifest `media_type` as Content-Type (404 on unknown ids/paths). Platform webviews may surface the scheme as `http://epub.localhost/...`; the frontend builds URLs only via the `resourceUrl` helper (`convertFileSrc`-based), never by hand. |
 
 ### Editing
 
