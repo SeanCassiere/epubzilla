@@ -21,6 +21,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Typecheck
         run: pnpm typecheck
+      - name: Unit tests
+        run: pnpm --dir frontend test
       - name: Build
         run: pnpm build:frontend
       - name: No hand-written model type mirrors (ADR-0006)
