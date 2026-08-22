@@ -1,0 +1,14 @@
+{
+  "name": "epubzilla",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "tauri": "cd crates/app && tauri",
+    "dev": "cd crates/app && tauri dev",
+    "typecheck": "pnpm --dir frontend typecheck",
+    "build:frontend": "pnpm --dir frontend build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}
