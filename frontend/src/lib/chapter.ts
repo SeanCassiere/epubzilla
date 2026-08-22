@@ -86,8 +86,8 @@ const URL_ATTRS: ReadonlyArray<{ selector: string; attr: string }> = [
 
 /**
  * Rewrites relative resource URLs in the parsed chapter to asset-protocol
- * URLs. Anchor (`a href`) links are deliberately untouched: fragment-only
- * links stay as-is, and inter-chapter navigation is M1.4's job.
+ * URLs. Anchor (`a href`) links are handled separately by
+ * `annotateChapterLinks` (inter-chapter navigation, M1.4).
  */
 export function rewriteResourceUrls(
   doc: Document,
@@ -103,6 +103,43 @@ export function rewriteResourceUrls(
         el.setAttribute(attr, resourceUrl(resolved.path) + resolved.suffix);
       }
     }
+  }
+}
+
+/**
+ * Annotates anchor links for M1.4 navigation:
+ *
+ * - Relative links whose resolved zip-internal path is another manifest
+ *   XHTML document get `data-epub-link="path[#fragment]"` (query dropped,
+ *   fragment kept). The original href stays for fidelity; ReaderPane
+ *   intercepts clicks on annotated anchors and drives app navigation.
+ * - External http(s) links would be dead clicks (the sandbox has no
+ *   allow-popups and top navigation is blocked), so the href is stripped;
+ *   the original URL is preserved in `data-epub-external` and surfaced
+ *   via `title` so hovering still reveals the destination.
+ * - Fragment-only links are untouched (in-document scroll works).
+ */
+export function annotateChapterLinks(
+  doc: Document,
+  chapterPath: string,
+  xhtmlPaths: ReadonlySet<string>,
+): void {
+  for (const a of Array.from(doc.querySelectorAll("a[href]"))) {
+    const href = a.getAttribute("href");
+    if (href === null) continue;
+    const trimmed = href.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
+    if (/^https?:/i.test(trimmed)) {
+      a.removeAttribute("href");
+      a.setAttribute("data-epub-external", trimmed);
+      a.setAttribute("title", `External link: ${trimmed}`);
+      continue;
+    }
+    const resolved = resolveChapterUrl(chapterPath, trimmed);
+    if (resolved === null || !xhtmlPaths.has(resolved.path)) continue;
+    const hash = resolved.suffix.indexOf("#");
+    const fragment = hash === -1 ? "" : resolved.suffix.slice(hash);
+    a.setAttribute("data-epub-link", resolved.path + fragment);
   }
 }
 
@@ -159,10 +196,12 @@ export function prepareChapterHtml(
   xhtml: string,
   chapterPath: string,
   resourceUrl: ResourceUrlResolver,
+  xhtmlPaths: ReadonlySet<string> = new Set(),
 ): string {
   const doc = new DOMParser().parseFromString(xhtml, "text/html");
   stripActiveContent(doc);
   rewriteResourceUrls(doc, chapterPath, resourceUrl);
+  annotateChapterLinks(doc, chapterPath, xhtmlPaths);
 
   const style = doc.createElement("style");
   style.setAttribute("data-epubzilla", "defaults");

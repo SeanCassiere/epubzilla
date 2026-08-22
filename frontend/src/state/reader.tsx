@@ -24,10 +24,17 @@ interface ReaderState {
   spineIndex: number;
   chapter: ChapterContent | null;
   status: ReaderStatus;
+  /**
+   * Element id inside the current chapter to scroll to (from a TOC entry
+   * or inter-chapter link with `#fragment`); null means "top of chapter".
+   */
+  fragment: string | null;
   /** CoreError from the last failed command (render via describeError). */
   error: unknown;
   openBook: (path: string) => Promise<void>;
   goTo: (spineIndex: number) => Promise<void>;
+  /** Navigate by zip-internal resource path (TOC entries, chapter links). */
+  goToResource: (path: string, fragment: string | null) => Promise<void>;
   nextChapter: () => Promise<void>;
   previousChapter: () => Promise<void>;
 }
@@ -46,24 +53,33 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
   const [book, setBook] = useState<Book | null>(null);
   const [spineIndex, setSpineIndex] = useState(-1);
   const [chapter, setChapter] = useState<ChapterContent | null>(null);
+  const [fragment, setFragment] = useState<string | null>(null);
   const [status, setStatus] = useState<ReaderStatus>("idle");
   const [error, setError] = useState<unknown>(null);
 
-  const loadChapter = useCallback(async (target: Book, index: number) => {
-    const item = target.spine[index];
-    if (item === undefined) return;
-    setStatus("loading-chapter");
-    setError(null);
-    try {
-      const content = await api.readChapter(target.id, item.resource, "Xhtml");
-      setChapter(content);
-      setSpineIndex(index);
-      setStatus("ready");
-    } catch (err) {
-      setError(err);
-      setStatus("ready");
-    }
-  }, []);
+  const loadChapter = useCallback(
+    async (target: Book, index: number, targetFragment: string | null = null) => {
+      const item = target.spine[index];
+      if (item === undefined) return;
+      setStatus("loading-chapter");
+      setError(null);
+      try {
+        const content = await api.readChapter(
+          target.id,
+          item.resource,
+          "Xhtml",
+        );
+        setChapter(content);
+        setSpineIndex(index);
+        setFragment(targetFragment);
+        setStatus("ready");
+      } catch (err) {
+        setError(err);
+        setStatus("ready");
+      }
+    },
+    [],
+  );
 
   const openBook = useCallback(
     async (path: string) => {
@@ -101,6 +117,23 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
     [book, loadChapter],
   );
 
+  const goToResource = useCallback(
+    async (path: string, targetFragment: string | null) => {
+      if (book === null) return;
+      const resource = book.resources.find((r) => r.path === path);
+      if (resource === undefined) return;
+      const index = book.spine.findIndex((s) => s.resource === resource.id);
+      if (index === -1) return;
+      if (index === spineIndex && chapter !== null) {
+        // Same chapter: only the scroll target changes, no reload.
+        setFragment(targetFragment);
+        return;
+      }
+      await loadChapter(book, index, targetFragment);
+    },
+    [book, spineIndex, chapter, loadChapter],
+  );
+
   const nextChapter = useCallback(async () => {
     if (book === null) return;
     const next = findLinear(book, spineIndex + 1, 1);
@@ -118,10 +151,12 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       book,
       spineIndex,
       chapter,
+      fragment,
       status,
       error,
       openBook,
       goTo,
+      goToResource,
       nextChapter,
       previousChapter,
     }),
@@ -129,10 +164,12 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       book,
       spineIndex,
       chapter,
+      fragment,
       status,
       error,
       openBook,
       goTo,
+      goToResource,
       nextChapter,
       previousChapter,
     ],

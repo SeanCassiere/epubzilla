@@ -191,3 +191,87 @@ describe("prepareChapterHtml", () => {
     expect(html).toContain("café にほん \u{1f4d6}");
   });
 });
+
+describe("annotateChapterLinks (via prepareChapterHtml)", () => {
+  const chapter = (body: string): string =>
+    `<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body>${body}</body></html>`;
+
+  const xhtmlPaths = new Set([
+    "OEBPS/text/ch1.xhtml",
+    "OEBPS/text/ch2.xhtml",
+    "OEBPS/notes.xhtml",
+  ]);
+
+  it("annotates a sibling chapter link with the zip-internal path", () => {
+    const html = prepareChapterHtml(
+      chapter(`<a href="ch2.xhtml">next</a>`),
+      "OEBPS/text/ch1.xhtml",
+      asset,
+      xhtmlPaths,
+    );
+    expect(html).toContain(`data-epub-link="OEBPS/text/ch2.xhtml"`);
+  });
+
+  it("resolves ../ and keeps the fragment (query dropped)", () => {
+    const html = prepareChapterHtml(
+      chapter(`<a href="../notes.xhtml?v=1#n3">note</a>`),
+      "OEBPS/text/ch1.xhtml",
+      asset,
+      xhtmlPaths,
+    );
+    expect(html).toContain(`data-epub-link="OEBPS/notes.xhtml#n3"`);
+  });
+
+  it("does not annotate links to non-XHTML resources", () => {
+    const html = prepareChapterHtml(
+      chapter(`<a href="../images/map.png">map</a>`),
+      "OEBPS/text/ch1.xhtml",
+      asset,
+      xhtmlPaths,
+    );
+    expect(html).not.toContain("data-epub-link");
+  });
+
+  it("leaves fragment-only links untouched", () => {
+    const html = prepareChapterHtml(
+      chapter(`<a href="#top">top</a>`),
+      "OEBPS/text/ch1.xhtml",
+      asset,
+      xhtmlPaths,
+    );
+    expect(html).toContain(`href="#top"`);
+    expect(html).not.toContain("data-epub-link");
+  });
+
+  it("strips external http(s) hrefs and marks them", () => {
+    const html = prepareChapterHtml(
+      chapter(`<a href="https://example.com/x">site</a>`),
+      "OEBPS/text/ch1.xhtml",
+      asset,
+      xhtmlPaths,
+    );
+    expect(html).not.toContain(`href="https://example.com/x"`);
+    expect(html).toContain(`data-epub-external="https://example.com/x"`);
+    expect(html).toContain(`title="External link: https://example.com/x"`);
+  });
+
+  it("leaves non-http schemes (mailto:) alone", () => {
+    const html = prepareChapterHtml(
+      chapter(`<a href="mailto:a@b.c">mail</a>`),
+      "OEBPS/text/ch1.xhtml",
+      asset,
+      xhtmlPaths,
+    );
+    expect(html).toContain(`href="mailto:a@b.c"`);
+  });
+
+  it("annotates nothing when xhtmlPaths is omitted (default arg)", () => {
+    const html = prepareChapterHtml(
+      chapter(`<a href="ch2.xhtml">next</a>`),
+      "OEBPS/text/ch1.xhtml",
+      asset,
+    );
+    expect(html).not.toContain("data-epub-link");
+  });
+});
