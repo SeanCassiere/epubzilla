@@ -1,6 +1,6 @@
-//! Tauri shell for epubzilla: the reader commands over a shared
-//! `epubzilla_core::Session` (core-api.md) and the `epub://` asset protocol
-//! for chapter resources. Mutation commands land with M2.
+//! Tauri shell for epubzilla: the core-api.md command surface over a shared
+//! `epubzilla_core::Session` and the `epub://` asset protocol for chapter
+//! resources.
 
 mod commands;
 mod protocol;
@@ -22,6 +22,14 @@ pub fn run() {
             commands::read_chapter,
             commands::read_resource,
             commands::close_book,
+            commands::create_book,
+            commands::save_book,
+            commands::write_chapter,
+            commands::update_metadata,
+            commands::add_chapter,
+            commands::remove_chapter,
+            commands::reorder_spine,
+            commands::validate,
         ])
         .register_uri_scheme_protocol("epub", |ctx, request| {
             let session = ctx.app_handle().state::<SharedSession>();
