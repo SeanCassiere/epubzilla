@@ -8,6 +8,7 @@ pub mod error;
 pub mod model;
 pub mod nav;
 pub mod opf;
+pub mod roundtrip;
 pub mod session;
 mod writer;
 
@@ -17,6 +18,7 @@ pub use model::{
     Book, BookId, ChapterContent, ContentFormat, EpubVersion, Metadata, NavPoint, Resource,
     ResourceId, SpineItem, SpineItemId,
 };
+pub use roundtrip::{markdown_to_xhtml, xhtml_to_markdown};
 pub use session::Session;
 
 #[cfg(test)]
