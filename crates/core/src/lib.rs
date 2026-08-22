@@ -8,6 +8,7 @@ pub mod error;
 pub mod model;
 pub mod nav;
 pub mod opf;
+pub mod session;
 
 pub use container::OcfContainer;
 pub use error::{CoreError, CoreResult, Severity, ValidationIssue};
@@ -15,6 +16,7 @@ pub use model::{
     Book, BookId, ChapterContent, ContentFormat, EpubVersion, Metadata, NavPoint, Resource,
     ResourceId, SpineItem, SpineItemId,
 };
+pub use session::Session;
 
 #[cfg(test)]
 mod tests {
