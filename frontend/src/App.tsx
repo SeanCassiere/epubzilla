@@ -1,19 +1,29 @@
-import { ReaderProvider } from "./state/reader";
+import { ReaderProvider, useReader } from "./state/reader";
 import { Header } from "./components/Header";
 import { ReaderPane } from "./components/ReaderPane";
+import { TocSidebar } from "./components/TocSidebar";
 import "./App.css";
 
-// Layout shell: header + main pane. The <main> grid keeps an obvious slot
-// for the M1.4 TOC sidebar (an <aside> as the first grid column).
+// Main pane: TOC sidebar (when the open book has a nav tree) + reader.
+// Keyed by book.id so per-book TOC expansion state resets on open.
+function MainArea() {
+  const { book } = useReader();
+  const hasToc = book !== null && book.nav.length > 0;
+  return (
+    <main className={hasToc ? "app-main with-toc" : "app-main"}>
+      {hasToc && <TocSidebar key={book.id} />}
+      <ReaderPane />
+    </main>
+  );
+}
+
+// Layout shell: header + main pane.
 function App() {
   return (
     <ReaderProvider>
       <div className="app-shell">
         <Header />
-        <main className="app-main">
-          {/* M1.4: TOC sidebar <aside> mounts here, before the reader pane. */}
-          <ReaderPane />
-        </main>
+        <MainArea />
       </div>
     </ReaderProvider>
   );
