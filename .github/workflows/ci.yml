@@ -29,6 +29,17 @@ jobs:
           git diff --exit-code crates/core/bindings/ \
             || { echo "::error::crates/core/bindings/ is stale — run 'cargo test -p epubzilla-core export_bindings' and commit."; exit 1; }
 
+  perf:
+    # Enforces the performance budgets in docs/contracts/core-api.md
+    # (release build; the test is #[ignore]d so plain `cargo test` stays fast).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run perf budgets
+        run: cargo test -p epubzilla-core --release --test perf_budgets -- --ignored --nocapture
+
   epubcheck:
     # Validates every EPUB the writer produces (fixtures land with M0.6).
     runs-on: ubuntu-latest
