@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use crate::model::{Book, Metadata};
+use crate::model::{Book, Metadata, NavPoint};
 
 /// Current time as ISO 8601 UTC with second precision, e.g.
 /// `2026-08-23T12:34:56Z` — the exact shape `dcterms:modified` requires.
@@ -24,13 +24,16 @@ pub(crate) fn now_iso8601() -> String {
 }
 
 /// A fresh `urn:uuid:` identifier for books created without one. Random
-/// enough for document identity (time + pid entropy), shaped like a v4 UUID.
+/// enough for document identity (time + pid + counter entropy), shaped like
+/// a v4 UUID. The counter keeps same-instant calls distinct.
 pub(crate) fn generate_identifier() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let a = nanos as u64;
+    let a = (nanos as u64) ^ COUNTER.fetch_add(1, Ordering::Relaxed).rotate_left(48);
     let b = ((nanos >> 64) as u64)
         .wrapping_mul(0x9e37_79b9_7f4a_7c15)
         .wrapping_add((std::process::id() as u64).rotate_left(32))
@@ -203,17 +206,38 @@ pub(crate) fn write_title_page_xhtml(metadata: &Metadata) -> String {
     )
 }
 
-/// Generated EPUB 3 nav document for `create_book`. `entries` are
-/// (href-relative-to-nav, label) pairs in reading order.
-pub(crate) fn write_nav_xhtml(metadata: &Metadata, entries: &[(String, String)]) -> String {
+/// Generated EPUB 3 chapter document: the minimal valid frame (`<head>` with
+/// the chapter title) around an XHTML body fragment. The `epub:` namespace is
+/// declared when the body uses it (footnotes).
+pub(crate) fn write_chapter_xhtml(title: &str, language: &str, body: &str) -> String {
+    let epub_ns = if body.contains("epub:") {
+        r#" xmlns:epub="http://www.idpf.org/2007/ops""#
+    } else {
+        ""
+    };
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"{epub_ns} xml:lang="{lang}" lang="{lang}">
+<head>
+  <title>{title}</title>
+</head>
+<body>
+{body}</body>
+</html>
+"#,
+        lang = escape_xml(language),
+        title = escape_xml(title),
+    )
+}
+
+/// The EPUB 3 nav document, regenerated from the model's `NavPoint` tree.
+/// Hrefs in `nav` are zip-internal paths (plus optional fragment) and are
+/// rewritten relative to `nav_path`, the nav document's own zip path.
+pub(crate) fn write_nav_xhtml(metadata: &Metadata, nav: &[NavPoint], nav_path: &str) -> String {
+    let nav_dir = parent_dir(nav_path);
     let mut items = String::new();
-    for (href, label) in entries {
-        items.push_str(&format!(
-            "        <li><a href=\"{}\">{}</a></li>\n",
-            escape_xml(href),
-            escape_xml(label)
-        ));
-    }
+    write_nav_list(&mut items, nav, &nav_dir, 4);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
@@ -233,6 +257,37 @@ pub(crate) fn write_nav_xhtml(metadata: &Metadata, entries: &[(String, String)])
         lang = escape_xml(&metadata.language),
         title = escape_xml(&metadata.title),
     )
+}
+
+/// Render one `<ol>` level of the nav tree (list items only, no `<ol>` tags
+/// at the top level — the caller's template provides those).
+fn write_nav_list(out: &mut String, points: &[NavPoint], nav_dir: &str, indent: usize) {
+    let pad = " ".repeat(indent + 2);
+    for point in points {
+        let label = escape_xml(&point.label);
+        let anchor = match &point.href {
+            Some(href) => {
+                let (path, fragment) = match href.split_once('#') {
+                    Some((path, fragment)) => (path, Some(fragment)),
+                    None => (href.as_str(), None),
+                };
+                let mut target = relative_href(nav_dir, path);
+                if let Some(fragment) = fragment {
+                    target.push('#');
+                    target.push_str(fragment);
+                }
+                format!("<a href=\"{}\">{label}</a>", escape_xml(&target))
+            }
+            None => format!("<span>{label}</span>"),
+        };
+        if point.children.is_empty() {
+            out.push_str(&format!("{pad}<li>{anchor}</li>\n"));
+        } else {
+            out.push_str(&format!("{pad}<li>{anchor}\n{pad}  <ol>\n"));
+            write_nav_list(out, &point.children, nav_dir, indent + 4);
+            out.push_str(&format!("{pad}  </ol>\n{pad}</li>\n"));
+        }
+    }
 }
 
 fn parent_dir(path: &str) -> String {

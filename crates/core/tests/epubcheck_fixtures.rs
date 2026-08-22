@@ -5,7 +5,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use epubzilla_core::{Metadata, Session};
+use epubzilla_core::{ChapterContent, ContentFormat, Metadata, Session, SpineItemId};
 use zip::write::SimpleFileOptions;
 
 fn fixtures_dir() -> PathBuf {
@@ -46,9 +46,63 @@ fn generate_epubcheck_fixtures() {
         .unwrap();
     std::fs::remove_file(&source).unwrap();
 
-    // Both must reopen cleanly; epubcheck does the deep validation in CI.
+    // Fixture 3: the full mutation lifecycle (M0.8) — create, add chapters,
+    // write Markdown, reorder, remove — so CI's epubcheck validates output
+    // produced by every mutation command (core-api.md consistency rule 2).
+    let book = session.create_book(Metadata {
+        title: "Mütation Lifecycle ✓".into(),
+        authors: vec!["Mütation Tester".into()],
+        language: "en".into(),
+        identifier: String::new(),
+        modified: None,
+        description: None,
+        publisher: None,
+        cover_resource: None,
+    });
+    let book_id = book.id.clone();
+    let mut resources = Vec::new();
+    for title in ["Chäpter One", "Chapter Twö ✓", "Chapter Three"] {
+        let book = session.add_chapter(&book_id, title, None).unwrap();
+        resources.push(book.spine.last().unwrap().resource.clone());
+    }
+    for (n, resource) in resources.iter().enumerate() {
+        let md = format!(
+            "# Chapter {n}\n\nBödy with *émphasis*, `code`, and a list ✓:\n\n- one\n- two\n",
+        );
+        session
+            .write_chapter(
+                &book_id,
+                resource,
+                ChapterContent {
+                    resource: resource.clone(),
+                    format: ContentFormat::Markdown,
+                    content: md,
+                },
+            )
+            .unwrap();
+    }
+    let book = session.get_book(&book_id).unwrap();
+    let order: Vec<SpineItemId> = vec![
+        book.spine[0].id.clone(),
+        book.spine[3].id.clone(),
+        book.spine[1].id.clone(),
+        book.spine[2].id.clone(),
+    ];
+    session.reorder_spine(&book_id, &order).unwrap();
+    let book = session.get_book(&book_id).unwrap();
+    let last = book.spine.last().unwrap().id.clone();
+    session.remove_chapter(&book_id, &last).unwrap();
+    assert!(session.validate(&book_id).unwrap().is_empty());
+    let mutated = dir.join("mutation-lifecycle.epub");
+    session
+        .save_book(&book_id, Some(mutated.to_string_lossy().into_owned()))
+        .unwrap();
+
+    // All must reopen cleanly; epubcheck does the deep validation in CI.
     session.open_book(&created).unwrap();
     session.open_book(&resaved).unwrap();
+    let reopened = session.open_book(&mutated).unwrap();
+    assert!(session.validate(&reopened.id).unwrap().is_empty());
 }
 
 /// Hand-build a valid multi-chapter EPUB 3 to exercise the incremental path.
