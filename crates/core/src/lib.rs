@@ -9,6 +9,8 @@ pub mod model;
 pub mod nav;
 pub mod opf;
 pub mod roundtrip;
+pub mod session;
+mod writer;
 
 pub use container::OcfContainer;
 pub use error::{CoreError, CoreResult, Severity, ValidationIssue};
@@ -17,6 +19,7 @@ pub use model::{
     ResourceId, SpineItem, SpineItemId,
 };
 pub use roundtrip::{markdown_to_xhtml, xhtml_to_markdown};
+pub use session::Session;
 
 #[cfg(test)]
 mod tests {

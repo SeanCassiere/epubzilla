@@ -85,6 +85,32 @@ impl<R: Read + Seek> OcfContainer<R> {
         self.archive.file_names().map(str::to_owned).collect()
     }
 
+    /// Raw-copy (no re-encode) every entry into `writer`, byte-for-byte,
+    /// compression and all — except those whose name `skip` returns true
+    /// for. Backbone of incremental save (ADR-0002, M0.6).
+    pub fn raw_copy_entries<W: std::io::Write + Seek>(
+        &mut self,
+        writer: &mut zip::ZipWriter<W>,
+        skip: impl Fn(&str) -> bool,
+    ) -> CoreResult<()> {
+        for index in 0..self.archive.len() {
+            let entry = self
+                .archive
+                .by_index_raw(index)
+                .map_err(|e| CoreError::Io {
+                    message: format!("reading zip entry #{index}: {e}"),
+                })?;
+            if skip(entry.name()) {
+                continue;
+            }
+            let name = entry.name().to_owned();
+            writer.raw_copy_file(entry).map_err(|e| CoreError::Io {
+                message: format!("raw-copying zip entry {name}: {e}"),
+            })?;
+        }
+        Ok(())
+    }
+
     /// Uncompressed size of one entry.
     pub fn entry_size(&mut self, path: &str) -> CoreResult<u64> {
         let entry = self
