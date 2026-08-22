@@ -45,20 +45,14 @@ jobs:
           curl -fsSL -o epubcheck.zip https://github.com/w3c/epubcheck/releases/download/v5.2.1/epubcheck-5.2.1.zip
           unzip -q epubcheck.zip
       - name: Generate fixture EPUBs
-        run: |
-          mkdir -p target/epubcheck-fixtures
-          if cargo run -p epubzilla-cli -- create --help >/dev/null 2>&1; then
-            echo "TODO(M0.6): generate fixture books into target/epubcheck-fixtures"
-          else
-            echo "Writer not implemented yet (M0.6) — no fixtures to validate."
-          fi
+        run: cargo test -p epubzilla-core --test epubcheck_fixtures
       - name: Run epubcheck
         run: |
           shopt -s nullglob
           fixtures=(target/epubcheck-fixtures/*.epub)
           if [ ${#fixtures[@]} -eq 0 ]; then
-            echo "No fixture EPUBs found — skipping (expected until M0.6)."
-            exit 0
+            echo "::error::No fixture EPUBs found — the writer must produce fixtures (M0.6)."
+            exit 1
           fi
           fail=0
           for f in "${fixtures[@]}"; do
