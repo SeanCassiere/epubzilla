@@ -6,6 +6,7 @@
 pub mod container;
 pub mod error;
 pub mod model;
+pub mod opf;
 
 pub use container::OcfContainer;
 pub use error::{CoreError, CoreResult, Severity, ValidationIssue};
