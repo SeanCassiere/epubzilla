@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "io.github.seancassiere.epubzilla",
   "build": {
-    "beforeDevCommand": "pnpm --dir ../../frontend dev",
+    "beforeDevCommand": "pnpm --filter @epubzilla/frontend dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm --dir ../../frontend build",
+    "beforeBuildCommand": "pnpm --filter @epubzilla/frontend build",
     "frontendDist": "../../frontend/dist"
   },
   "app": {
