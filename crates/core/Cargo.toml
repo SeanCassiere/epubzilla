@@ -1,0 +1,15 @@
+[package]
+name = "epubzilla-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "EPUB engine: parse, model, and write EPUB files"
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+ts-rs = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -1,0 +1,15 @@
+[package]
+name = "epubzilla-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CLI harness for the epubzilla core engine"
+
+[[bin]]
+name = "epubzilla-cli"
+path = "src/main.rs"
+
+[dependencies]
+epubzilla-core = { path = "../core" }
+clap = { version = "4", features = ["derive"] }
