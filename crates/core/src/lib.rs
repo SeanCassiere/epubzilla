@@ -9,6 +9,7 @@ pub mod model;
 pub mod nav;
 pub mod opf;
 pub mod session;
+mod writer;
 
 pub use container::OcfContainer;
 pub use error::{CoreError, CoreResult, Severity, ValidationIssue};
