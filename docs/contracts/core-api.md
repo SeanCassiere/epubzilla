@@ -1,0 +1,72 @@
+# Contract: Core API
+
+Status: **Accepted** · Changes via PR only.
+
+The command surface the Rust core exposes to the frontend (Tauri commands).
+Types reference `domain-model.md`. All commands are async and return
+`Result<T, CoreError>`.
+
+The core owns an in-memory session of open books keyed by `BookId`
+(edit-in-place model, ADR-0002). The frontend is stateless with respect to
+book data: it holds `BookId`s and re-fetches.
+
+## Commands
+
+### Lifecycle
+
+| Command | Input | Output | Notes |
+|---|---|---|---|
+| `open_book` | `path: String` | `Book` | Parses container/OPF/nav eagerly; chapter bodies lazy. |
+| `create_book` | `metadata: Metadata` | `Book` | New in-memory EPUB 3 book with a generated title page; `source: None`. |
+| `save_book` | `book_id, path: Option<String>` | `Book` | Atomic write (temp + rename). `path` required when `source` is `None` (save-as). Untouched zip entries are copied, not re-encoded. Refreshes `dcterms:modified`, clears `dirty`. |
+| `close_book` | `book_id` | `()` | Drops session state. Unsaved changes are the frontend's problem to confirm. |
+
+### Reading
+
+| Command | Input | Output | Notes |
+|---|---|---|---|
+| `get_book` | `book_id` | `Book` | Current model snapshot. |
+| `read_chapter` | `book_id, resource_id, prefer: ContentFormat` | `ChapterContent` | `prefer: Markdown` converts per `content-roundtrip.md`; returns `format: Xhtml` when conversion would be lossy. |
+| `read_resource` | `book_id, resource_id` | `ResourcePayload` | For images/CSS/fonts. Delivered as bytes or a servable URI (implementation detail of the Tauri asset protocol; decided in M1). |
+
+### Editing
+
+All editing commands set `dirty: true` and return the updated `Book` so the
+frontend never computes model changes itself.
+
+| Command | Input | Output | Notes |
+|---|---|---|---|
+| `write_chapter` | `book_id, resource_id, content: ChapterContent` | `Book` | Markdown input is converted to XHTML on write. |
+| `update_metadata` | `book_id, metadata: Metadata` | `Book` | Regenerates title page if book uses a generated one. |
+| `add_chapter` | `book_id, title: String, after: Option<SpineItemId>` | `Book` | Creates resource + spine entry + nav entry. |
+| `remove_chapter` | `book_id, spine_item_id` | `Book` | Removes spine entry, nav entries, and the resource if unreferenced. |
+| `reorder_spine` | `book_id, order: Vec<SpineItemId>` | `Book` | Must be a permutation of the current spine; nav order follows for top-level chapter entries. |
+
+### Validation
+
+| Command | Input | Output | Notes |
+|---|---|---|---|
+| `validate` | `book_id` | `Vec<ValidationIssue>` | Native Rust subset (ADR-0003). Full `epubcheck` runs in CI only. |
+
+## Consistency rules
+
+1. Spine, nav, and manifest are kept in sync **by the core**. No command can
+   leave them inconsistent; there is no command to edit nav or manifest directly
+   in v1.
+2. `save_book` output must pass `epubcheck` with zero errors for any book
+   created by `create_book` and mutated only through this API.
+3. Commands are serialized per book: concurrent calls on one `book_id` are
+   queued by the core, not rejected.
+
+## Performance budgets
+
+Measured on the reference machine (typical laptop, local SSD), release build:
+
+| Operation | Budget |
+|---|---|
+| `open_book` — 500-chapter book, ~50 MB | ≤ 1000 ms |
+| `read_chapter` — typical chapter (~50 KB XHTML) | ≤ 50 ms |
+| `write_chapter` | ≤ 50 ms (in-memory; no disk I/O) |
+| `save_book` — one chapter changed in the 500-chapter book | ≤ 500 ms |
+
+Budgets are enforced by benchmark tests in the core crate; regressions fail CI.
