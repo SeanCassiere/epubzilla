@@ -6,6 +6,7 @@
 pub mod container;
 pub mod error;
 pub mod model;
+pub mod nav;
 pub mod opf;
 
 pub use container::OcfContainer;
