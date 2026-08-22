@@ -1,25 +1,21 @@
-import type { Book } from "@bindings/Book";
+import { ReaderProvider } from "./state/reader";
+import { Header } from "./components/Header";
+import { ReaderPane } from "./components/ReaderPane";
 import "./App.css";
 
-// Placeholder shell — the reader lands with M1.3 (#27). The typed prop
-// proves the generated-bindings import path end to end.
-function BookSummary({ book }: { book: Book | null }) {
-  if (!book) {
-    return <p className="empty">No book open. Opening files lands with M1.3.</p>;
-  }
-  return (
-    <p>
-      {book.metadata.title} — {book.metadata.authors.join(", ")}
-    </p>
-  );
-}
-
+// Layout shell: header + main pane. The <main> grid keeps an obvious slot
+// for the M1.4 TOC sidebar (an <aside> as the first grid column).
 function App() {
   return (
-    <main className="container">
-      <h1>epubzilla</h1>
-      <BookSummary book={null} />
-    </main>
+    <ReaderProvider>
+      <div className="app-shell">
+        <Header />
+        <main className="app-main">
+          {/* M1.4: TOC sidebar <aside> mounts here, before the reader pane. */}
+          <ReaderPane />
+        </main>
+      </div>
+    </ReaderProvider>
   );
 }
 
