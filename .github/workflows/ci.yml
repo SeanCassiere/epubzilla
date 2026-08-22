@@ -9,10 +9,43 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Build
+        run: pnpm build:frontend
+      - name: No hand-written model type mirrors (ADR-0006)
+        run: |
+          if grep -rnE "(interface|type) +(Book|Metadata|SpineItem|NavPoint|Resource|ChapterContent|ContentFormat|EpubVersion|CoreError|ValidationIssue|Severity)\b *[={]" frontend/src; then
+            echo "::error::Model types must be imported from @bindings (crates/core/bindings), never redefined."
+            exit 1
+          fi
+
   rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      # tauri::generate_context! requires frontendDist to exist at compile time.
+      - name: Build frontend dist
+        run: pnpm install --frozen-lockfile && pnpm build:frontend
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

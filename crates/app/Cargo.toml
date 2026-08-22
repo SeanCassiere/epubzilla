@@ -1,0 +1,21 @@
+[package]
+name = "epubzilla-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Tauri desktop shell for epubzilla"
+
+[lib]
+# The `_lib` suffix avoids a Windows name clash between lib and bin targets.
+name = "epubzilla_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+epubzilla-core = { path = "../core" }
+tauri = { version = "2", features = [] }
+serde = { workspace = true }
+serde_json = { workspace = true }

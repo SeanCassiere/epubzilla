@@ -36,6 +36,23 @@ Next up: M1 — Tauri shell wiring the core to a UI. See the
 [project issues](https://github.com/seancassiere/epubzilla/issues) for the
 milestone breakdown.
 
+## Development
+
+Prerequisites: Rust (stable), Node 22+, pnpm.
+
+```sh
+pnpm install          # JS deps (frontend workspace)
+pnpm dev              # Tauri dev shell with Vite HMR
+pnpm typecheck        # frontend typecheck
+cargo test --workspace
+```
+
+Layout: `crates/core` (engine), `crates/cli` (harness), `crates/app` (Tauri
+shell), `frontend/` (React UI). Frontend model types come exclusively from the
+generated `crates/core/bindings/` (`@bindings/*` alias) — regenerate with
+`cargo test -p epubzilla-core export_bindings`. Architecture decisions live in
+`docs/adr/`, interface contracts in `docs/contracts/`.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
