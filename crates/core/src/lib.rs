@@ -3,9 +3,11 @@
 //! UI-free by design — exercised by `epubzilla-cli` and, from M1 on, wrapped
 //! by Tauri commands. Contracts live in `docs/contracts/`.
 
+pub mod container;
 pub mod error;
 pub mod model;
 
+pub use container::OcfContainer;
 pub use error::{CoreError, CoreResult, Severity, ValidationIssue};
 pub use model::{
     Book, BookId, ChapterContent, ContentFormat, EpubVersion, Metadata, NavPoint, Resource,

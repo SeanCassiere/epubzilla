@@ -7,9 +7,11 @@ repository.workspace = true
 description = "EPUB engine: parse, model, and write EPUB files"
 
 [dependencies]
+quick-xml = "0.42.0"
 serde = { workspace = true }
 thiserror = { workspace = true }
 ts-rs = { workspace = true }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 serde_json = { workspace = true }
