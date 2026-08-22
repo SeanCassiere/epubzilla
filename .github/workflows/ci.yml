@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --workspace
+      - name: TypeScript bindings are up to date
+        run: |
+          cargo test -p epubzilla-core export_bindings
+          git diff --exit-code crates/core/bindings/ \
+            || { echo "::error::crates/core/bindings/ is stale — run 'cargo test -p epubzilla-core export_bindings' and commit."; exit 1; }
+
+  epubcheck:
+    # Validates every EPUB the writer produces (fixtures land with M0.6).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Install epubcheck
+        run: |
+          curl -fsSL -o epubcheck.zip https://github.com/w3c/epubcheck/releases/download/v5.2.1/epubcheck-5.2.1.zip
+          unzip -q epubcheck.zip
+      - name: Generate fixture EPUBs
+        run: |
+          mkdir -p target/epubcheck-fixtures
+          if cargo run -p epubzilla-cli -- create --help >/dev/null 2>&1; then
+            echo "TODO(M0.6): generate fixture books into target/epubcheck-fixtures"
+          else
+            echo "Writer not implemented yet (M0.6) — no fixtures to validate."
+          fi
+      - name: Run epubcheck
+        run: |
+          shopt -s nullglob
+          fixtures=(target/epubcheck-fixtures/*.epub)
+          if [ ${#fixtures[@]} -eq 0 ]; then
+            echo "No fixture EPUBs found — skipping (expected until M0.6)."
+            exit 0
+          fi
+          fail=0
+          for f in "${fixtures[@]}"; do
+            echo "== epubcheck $f"
+            java -jar epubcheck-5.2.1/epubcheck.jar "$f" || fail=1
+          done
+          exit $fail
