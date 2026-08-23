@@ -7,7 +7,8 @@
     "tauri": "cd crates/app && tauri",
     "dev": "cd crates/app && tauri dev",
     "typecheck": "pnpm --dir frontend typecheck",
-    "build:frontend": "pnpm --dir frontend build"
+    "build:frontend": "pnpm --dir frontend build",
+    "bump": "node scripts/bump-version.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

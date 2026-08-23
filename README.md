@@ -53,6 +53,31 @@ generated `crates/core/bindings/` (`@bindings/*` alias) — regenerate with
 `cargo test -p epubzilla-core export_bindings`. Architecture decisions live in
 `docs/adr/`, interface contracts in `docs/contracts/`.
 
+### Releases
+
+Tag pushes matching `v*` trigger the release workflow
+(`.github/workflows/release.yml`), which builds installers with
+[tauri-action](https://github.com/tauri-apps/tauri-action) for macOS
+(Apple Silicon dmg/app), Linux (AppImage/deb), and Windows (msi/nsis), and
+uploads them to a **draft** GitHub Release with notes generated from merged
+PRs since the previous tag. Review and publish the draft manually.
+
+To cut a release:
+
+```sh
+pnpm bump 0.2.0          # rewrites version in package.json, frontend/package.json,
+                         # Cargo.toml [workspace.package], crates/app/tauri.conf.json
+cargo check --workspace  # refresh Cargo.lock
+git add -A && git commit -m "v0.2.0"
+git tag v0.2.0
+git push && git push --tags
+```
+
+Builds are currently unsigned: on macOS, right-click the app and choose
+"Open" the first time to bypass Gatekeeper; on Windows, SmartScreen may warn
+("More info" > "Run anyway"). Signing/notarization is a follow-up once
+identities exist.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
