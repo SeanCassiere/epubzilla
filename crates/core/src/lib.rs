@@ -8,6 +8,7 @@ pub mod error;
 pub mod model;
 pub mod nav;
 pub mod opf;
+mod refs;
 pub mod roundtrip;
 pub mod session;
 mod writer;
