@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useReader, findLinear } from "../state/reader";
 import { prepareChapterHtml } from "../lib/chapter";
 import { shouldHandleNavKey, splitHref } from "../lib/toc";
@@ -10,6 +10,13 @@ const XHTML_MEDIA_TYPES: ReadonlySet<string> = new Set([
   "application/xhtml+xml",
   "text/html",
 ]);
+
+/**
+ * Delayed-spinner threshold (issue #56): chapter reads usually resolve in
+ * ~1ms, so flashing "Loading chapter…" on every switch reads as flicker.
+ * The indicator only appears when a load is still pending after this long.
+ */
+export const LOADING_INDICATOR_DELAY_MS = 150;
 
 /**
  * The reading surface: current chapter in a sandboxed iframe plus spine
@@ -38,6 +45,25 @@ export function ReaderPane() {
     editing,
     startEditing,
   } = useReader();
+
+  // Delayed loading indicator (issue #56): the previous chapter stays
+  // rendered while the next loads (`chapter` is only replaced on resolve),
+  // and the indicator appears only when the load outlasts the delay. The
+  // timer restarts with the effect on any status change, so on rapid
+  // successive switches only the load in flight counts, and it is cleared
+  // on resolve and on unmount by the effect cleanup.
+  const [showLoading, setShowLoading] = useState(false);
+  useEffect(() => {
+    if (status !== "loading-chapter") {
+      setShowLoading(false);
+      return;
+    }
+    const timer = window.setTimeout(
+      () => setShowLoading(true),
+      LOADING_INDICATOR_DELAY_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [status]);
 
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   // Latest handlers for listeners attached to each new iframe document.
@@ -188,7 +214,7 @@ export function ReaderPane() {
         )}
       </nav>
       {editing && <EditorPane />}
-      {!editing && status === "loading-chapter" && (
+      {!editing && showLoading && (
         <p className="status" role="status">
           Loading chapter…
         </p>
