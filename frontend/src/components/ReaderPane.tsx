@@ -9,6 +9,17 @@ import {
   themePreferenceLabel,
   type ThemePreference,
 } from "../lib/theme";
+import {
+  MODE_STORAGE_KEY,
+  offsetForPage,
+  pageAtOffset,
+  pageCount,
+  pageStep,
+  parseReadingMode,
+  readingModeLabel,
+  toggleReadingMode,
+  type ReadingMode,
+} from "../lib/readingMode";
 import { shouldHandleNavKey, splitHref } from "../lib/toc";
 import * as api from "../lib/api";
 import { EditorPane } from "./EditorPane";
@@ -63,6 +74,50 @@ function useThemePreference(): [ThemePreference, () => void] {
     });
   }, []);
   return [preference, cycle];
+}
+
+/** Reading-mode preference persisted across sessions (issue #75). */
+function useReadingMode(): [ReadingMode, () => void] {
+  const [mode, setMode] = useState<ReadingMode>(() => {
+    try {
+      return parseReadingMode(localStorage.getItem(MODE_STORAGE_KEY));
+    } catch {
+      return "scrolled";
+    }
+  });
+  const toggle = useCallback(() => {
+    setMode((current) => {
+      const next = toggleReadingMode(current);
+      try {
+        localStorage.setItem(MODE_STORAGE_KEY, next);
+      } catch {
+        // Persistence is best-effort; the in-session state still applies.
+      }
+      return next;
+    });
+  }, []);
+  return [mode, toggle];
+}
+
+/**
+ * Measures the paginated iframe body's page geometry (issue #75): one
+ * page is one overflow column, so the step between page left edges is
+ * the body's content-box width plus the column gap, and the page count
+ * follows from the scrollable range. Returns null when the document has
+ * no usable layout yet (e.g. zero-width during load).
+ */
+function measurePages(
+  body: HTMLElement,
+  win: Window,
+): { step: number; count: number } | null {
+  const style = win.getComputedStyle(body);
+  const gap = Number.parseFloat(style.columnGap) || 0;
+  const padLeft = Number.parseFloat(style.paddingLeft) || 0;
+  const padRight = Number.parseFloat(style.paddingRight) || 0;
+  const contentWidth = body.clientWidth - padLeft - padRight;
+  if (contentWidth <= 0) return null;
+  const step = pageStep(contentWidth, gap);
+  return { step, count: pageCount(body.scrollWidth, body.clientWidth, step) };
 }
 
 /**
@@ -127,6 +182,17 @@ export function ReaderPane() {
   const [themePreference, cycleThemePreference] = useThemePreference();
   const readingTheme = resolveReadingTheme(themePreference, systemDark);
 
+  // Reading mode (issue #75): scrolled is the historical default;
+  // paginated injects the multicol render layer into the srcdoc and the
+  // parent drives page turns via body.scrollLeft. Like theming this is
+  // presentation-only — stored EPUB content is never touched.
+  const [readingMode, toggleMode] = useReadingMode();
+  const modeRef = useRef(readingMode);
+  modeRef.current = readingMode;
+  // Set when a backward page turn leaves the chapter: the previous
+  // chapter should open at its LAST page. Consumed on the next frame load.
+  const openAtEndRef = useRef(false);
+
   const srcdoc = useMemo(() => {
     if (book === null || chapter === null) return null;
     const resource = book.resources.find((r) => r.id === chapter.resource);
@@ -142,22 +208,95 @@ export function ReaderPane() {
       (path) => api.resourceUrl(book.id, path),
       xhtmlPaths,
       readingTheme,
+      readingMode,
     );
-  }, [book, chapter, readingTheme]);
+  }, [book, chapter, readingTheme, readingMode]);
 
-  /** Scroll the iframe to the current fragment, or back to the top. */
+  /**
+   * Turn one page in paginated mode. At the chapter edges this crosses
+   * into the neighboring chapter (backwards lands on its last page).
+   */
+  const turnPage = useCallback((delta: 1 | -1) => {
+    const doc = frameRef.current?.contentDocument;
+    const body = doc?.body;
+    const win = doc?.defaultView;
+    if (body === null || body === undefined || win === null || win === undefined) {
+      return;
+    }
+    const pages = measurePages(body, win);
+    if (pages === null) return;
+    const target = pageAtOffset(body.scrollLeft, pages.step) + delta;
+    if (target < 0) {
+      openAtEndRef.current = true;
+      void actionsRef.current.previousChapter();
+      return;
+    }
+    if (target >= pages.count) {
+      void actionsRef.current.nextChapter();
+      return;
+    }
+    body.scrollLeft = offsetForPage(target, pages.step, pages.count);
+  }, []);
+
+  /**
+   * Backward navigation for keys: previous page in paginated mode
+   * (crossing chapters at page 0), previous chapter otherwise.
+   */
+  const navigateBack = useCallback(() => {
+    if (modeRef.current === "paginated") turnPage(-1);
+    else void actionsRef.current.previousChapter();
+  }, [turnPage]);
+
+  /** Forward counterpart of navigateBack. */
+  const navigateForward = useCallback(() => {
+    if (modeRef.current === "paginated") turnPage(1);
+    else void actionsRef.current.nextChapter();
+  }, [turnPage]);
+
+  /**
+   * Scroll the iframe to the current fragment, or back to the start.
+   * Paginated mode positions horizontally: the page containing the
+   * fragment target, the last page when a backward chapter cross is
+   * pending (openAtEndRef), or page 0.
+   */
   const applyScroll = useCallback(() => {
     const doc = frameRef.current?.contentDocument;
     if (doc === null || doc === undefined) return;
     const target = fragmentRef.current;
-    if (target !== null) {
-      const el =
-        doc.getElementById(target) ??
-        doc.querySelector(`a[name="${CSS.escape(target)}"]`);
+    const el =
+      target === null
+        ? null
+        : (doc.getElementById(target) ??
+          doc.querySelector(`a[name="${CSS.escape(target)}"]`));
+    if (modeRef.current === "paginated") {
+      const body = doc.body;
+      const win = doc.defaultView;
+      if (body === null || win === null) return;
+      const pages = measurePages(body, win);
+      if (pages === null) return;
       if (el !== null) {
-        el.scrollIntoView({ block: "start" });
+        // Page index from the element's horizontal offset within the
+        // body's content box (columns start at multiples of the step).
+        const contentLeft =
+          body.getBoundingClientRect().left +
+          (Number.parseFloat(win.getComputedStyle(body).paddingLeft) || 0);
+        const x =
+          el.getBoundingClientRect().left - contentLeft + body.scrollLeft;
+        body.scrollLeft = offsetForPage(
+          Math.floor(x / pages.step),
+          pages.step,
+          pages.count,
+        );
         return;
       }
+      body.scrollLeft = openAtEndRef.current
+        ? offsetForPage(pages.count - 1, pages.step, pages.count)
+        : 0;
+      return;
+    }
+    if (el !== null) {
+      el.scrollIntoView({ block: "start" });
+      return;
     }
     doc.defaultView?.scrollTo(0, 0);
   }, []);
@@ -168,8 +307,9 @@ export function ReaderPane() {
   }, [applyScroll, fragment, srcdoc]);
 
   /**
-   * Each srcdoc load creates a fresh document: wire up link interception
-   * and keyboard shortcuts inside it, then position the scroll.
+   * Each srcdoc load creates a fresh document: wire up link interception,
+   * keyboard shortcuts, and paginated click page-turns inside it, then
+   * position the scroll.
    */
   const handleFrameLoad = useCallback(() => {
     const doc = frameRef.current?.contentDocument;
@@ -181,23 +321,54 @@ export function ReaderPane() {
         if (!(target instanceof Element)) return;
         const anchor = target.closest("a[data-epub-link]");
         const link = anchor?.getAttribute("data-epub-link");
-        if (link === null || link === undefined) return;
-        // Navigate the app, never the iframe.
-        event.preventDefault();
-        const { path, fragment: frag } = splitHref(link);
-        void actionsRef.current.goToResource(path, frag);
+        if (link !== null && link !== undefined) {
+          // Navigate the app, never the iframe.
+          event.preventDefault();
+          const { path, fragment: frag } = splitHref(link);
+          void actionsRef.current.goToResource(path, frag);
+          return;
+        }
+        // Paginated click page-turn (issue #75): outer thirds of the
+        // viewport turn the page; the middle third stays inert so text
+        // selection and in-page links behave normally.
+        if (modeRef.current !== "paginated") return;
+        if (target.closest("a") !== null) return;
+        const selection = doc.defaultView?.getSelection();
+        if (selection !== null && selection !== undefined && !selection.isCollapsed) {
+          return;
+        }
+        const width = doc.defaultView?.innerWidth ?? 0;
+        if (width <= 0) return;
+        if (event.clientX >= (width * 2) / 3) turnPage(1);
+        else if (event.clientX <= width / 3) turnPage(-1);
       },
       true,
     );
     doc.addEventListener("keydown", (event) => {
+      const paginated = modeRef.current === "paginated";
       if (event.key === "ArrowLeft") {
-        void actionsRef.current.previousChapter();
+        navigateBack();
       } else if (event.key === "ArrowRight") {
-        void actionsRef.current.nextChapter();
+        navigateForward();
+      } else if (
+        paginated &&
+        (event.key === "PageDown" || (event.key === " " && !event.shiftKey))
+      ) {
+        event.preventDefault();
+        turnPage(1);
+      } else if (
+        paginated &&
+        (event.key === "PageUp" || (event.key === " " && event.shiftKey))
+      ) {
+        event.preventDefault();
+        turnPage(-1);
       }
     });
     applyScroll();
-  }, [applyScroll]);
+    // A pending "open at last page" (backward chapter cross) is satisfied
+    // by the applyScroll above; clear it only once the new doc has loaded.
+    openAtEndRef.current = false;
+  }, [applyScroll, navigateBack, navigateForward, turnPage]);
 
   // App-level ArrowLeft/ArrowRight shortcuts (skipped in text inputs).
   useEffect(() => {
@@ -210,14 +381,37 @@ export function ReaderPane() {
         return;
       }
       if (event.key === "ArrowLeft") {
-        void actionsRef.current.previousChapter();
+        navigateBack();
       } else {
-        void actionsRef.current.nextChapter();
+        navigateForward();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [navigateBack, navigateForward]);
+
+  // Paginated mode: a window resize reflows the columns, so re-snap the
+  // horizontal offset to the nearest page boundary under the new geometry.
+  useEffect(() => {
+    if (readingMode !== "paginated") return;
+    const onResize = () => {
+      const doc = frameRef.current?.contentDocument;
+      const body = doc?.body;
+      const win = doc?.defaultView;
+      if (body === null || body === undefined || win === null || win === undefined) {
+        return;
+      }
+      const pages = measurePages(body, win);
+      if (pages === null) return;
+      body.scrollLeft = offsetForPage(
+        pageAtOffset(body.scrollLeft, pages.step),
+        pages.step,
+        pages.count,
+      );
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [readingMode]);
 
   if (book === null) {
     return (
@@ -264,6 +458,14 @@ export function ReaderPane() {
           title="Reading theme: Auto follows the system; Light/Dark force a scheme. Books with their own styling always render light."
         >
           {themePreferenceLabel(themePreference)}
+        </button>
+        <button
+          type="button"
+          className="mode-toggle"
+          onClick={toggleMode}
+          title="Reading layout: Scrolled is a continuous column; Paginated turns viewport-height pages (arrow keys, PageUp/Down, Space, or click near the left/right edge)."
+        >
+          {readingModeLabel(readingMode)}
         </button>
         {book.epub_version === "V3" && spineIndex >= 0 && !editing && (
           <button

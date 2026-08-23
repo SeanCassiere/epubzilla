@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DARK_CHAPTER_CSS,
   DEFAULT_CHAPTER_CSS,
+  PAGINATED_CHAPTER_CSS,
   chapterHasAuthorStyling,
   isExternalOrFragment,
   prepareChapterHtml,
@@ -354,6 +355,99 @@ describe("prepareChapterHtml", () => {
       );
       expect(html).toContain("color-scheme: light;");
       expect(html).toContain('data-epubzilla-theme="light"');
+    });
+  });
+
+  // Issue #75: paginated reading mode at the render layer only.
+  describe("paginated reading mode", () => {
+    it("defaults to scrolled: no pagination block is injected", () => {
+      const html = prepareChapterHtml(
+        chapter("<p>hi</p>"),
+        "OEBPS/ch1.xhtml",
+        asset,
+      );
+      expect(html).not.toContain('data-epubzilla="pagination"');
+      expect(html).not.toContain("column-count");
+    });
+
+    it("injects the multicol pagination block last in <head>", () => {
+      const html = prepareChapterHtml(
+        chapter("<p>hi</p>", `<style>p { color: #333; }</style>`),
+        "OEBPS/ch1.xhtml",
+        asset,
+        new Set(),
+        "light",
+        "paginated",
+      );
+      expect(html).toContain('data-epubzilla="pagination"');
+      expect(html).toContain("column-count: 1;");
+      expect(html).toContain("column-fill: auto;");
+      // The user's explicit layout choice comes after author CSS.
+      expect(html.indexOf('data-epubzilla="pagination"')).toBeGreaterThan(
+        html.indexOf("color: #333"),
+      );
+      // Layout only — the pagination layer never sets colors.
+      expect(PAGINATED_CHAPTER_CSS).not.toContain("color-scheme");
+      expect(PAGINATED_CHAPTER_CSS).not.toContain("background");
+    });
+
+    it("composes with the #55 measure and the light pin", () => {
+      const html = prepareChapterHtml(
+        chapter("<p>hi</p>"),
+        "OEBPS/ch1.xhtml",
+        asset,
+        new Set(),
+        "light",
+        "paginated",
+      );
+      expect(html).toContain("color-scheme: light;");
+      expect(html).toContain("max-width: 42rem");
+      expect(html).toContain("margin-inline: auto");
+      expect(html).toContain('data-epubzilla="pagination"');
+    });
+
+    it("composes with the dark reading theme", () => {
+      const html = prepareChapterHtml(
+        chapter("<p>plain book</p>"),
+        "OEBPS/ch1.xhtml",
+        asset,
+        new Set(),
+        "dark",
+        "paginated",
+      );
+      expect(html).toContain("color-scheme: dark;");
+      expect(html).toContain('data-epubzilla-theme="dark"');
+      expect(html).toContain('data-epubzilla="pagination"');
+      expect(html).toContain("max-width: 42rem");
+    });
+
+    it("pagination stays presentation-only", () => {
+      const source = chapter("<p>body text</p>");
+      const html = prepareChapterHtml(
+        source,
+        "OEBPS/ch1.xhtml",
+        asset,
+        new Set(),
+        "light",
+        "paginated",
+      );
+      expect(source).not.toContain("data-epubzilla");
+      expect(source).not.toContain("column");
+      expect(html).toContain('data-epubzilla="pagination"');
+    });
+
+    it("the pagination block does not flip author-styling detection", () => {
+      // A paginated render of a minimally-styled chapter must still count
+      // as minimally styled next time (the injected block is marked).
+      const html = prepareChapterHtml(
+        chapter("<p>plain</p>"),
+        "OEBPS/ch1.xhtml",
+        asset,
+        new Set(),
+        "dark",
+        "paginated",
+      );
+      expect(html).toContain('data-epubzilla-theme="dark"');
     });
   });
 
