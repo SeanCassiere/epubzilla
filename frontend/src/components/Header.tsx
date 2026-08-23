@@ -102,25 +102,30 @@ export function Header() {
 
   // Cmd/Ctrl+S saves (apply-then-save, same flow as the Save button);
   // Cmd/Ctrl+E toggles edit mode (leaving goes through the editor's guard).
+  // The listener registers once and reads refs so rapid toggles never hit a
+  // stale closure between a state change and the effect re-registering.
+  const shortcutsRef = useRef({ save, editing, startEditing, requestStopEditing });
+  shortcutsRef.current = { save, editing, startEditing, requestStopEditing };
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!event.metaKey && !event.ctrlKey) return;
       const key = event.key.toLowerCase();
+      const current = shortcutsRef.current;
       if (key === "s") {
         event.preventDefault();
-        void save();
+        void current.save();
       } else if (key === "e") {
         event.preventDefault();
-        if (editing) {
-          void requestStopEditing();
+        if (current.editing) {
+          void current.requestStopEditing();
         } else {
-          startEditing();
+          current.startEditing();
         }
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [save, editing, startEditing, requestStopEditing]);
+  }, []);
 
   // Window-close guard: intercept close-requested while dirty and route it
   // through the same modal; on proceed, destroy the window for real. The
