@@ -108,6 +108,44 @@ pub(crate) fn reorder_spine_impl(
     lock(session)?.reorder_spine(book_id, order)
 }
 
+/// Image media type for a file extension (case-insensitive). The picker
+/// filter and this list must stay in sync (frontend/src/lib/dialog.ts).
+fn image_media_type(extension: Option<&str>) -> Option<&'static str> {
+    match extension?.to_ascii_lowercase().as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "svg" => Some("image/svg+xml"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
+/// M3.3: read one image file from an OS path and store it in the book via
+/// `Session::add_resource` — bytes never cross IPC. The media type is
+/// inferred from the file extension.
+pub(crate) fn add_resource_from_path_impl(
+    session: &SharedSession,
+    book_id: &str,
+    os_path: &str,
+) -> CoreResult<Book> {
+    let path = std::path::Path::new(os_path);
+    let media_type =
+        image_media_type(path.extension().and_then(|e| e.to_str())).ok_or_else(|| {
+            CoreError::UnsupportedFeature {
+                message: format!(
+                    "add_resource_from_path: {os_path:?} is not a supported image \
+                 (png, jpg, jpeg, gif, svg, webp)"
+                ),
+            }
+        })?;
+    let bytes = std::fs::read(path).map_err(|e| CoreError::Io {
+        message: format!("add_resource_from_path: cannot read {os_path}: {e}"),
+    })?;
+    let hint = path.file_name().and_then(|n| n.to_str()).unwrap_or("image");
+    lock(session)?.add_resource(book_id, hint, media_type, bytes)
+}
+
 pub(crate) fn validate_impl(
     session: &SharedSession,
     book_id: &str,
@@ -219,6 +257,15 @@ pub async fn reorder_spine(
     order: Vec<SpineItemId>,
 ) -> CoreResult<Book> {
     reorder_spine_impl(&session, &book_id, &order)
+}
+
+#[tauri::command]
+pub async fn add_resource_from_path(
+    session: tauri::State<'_, SharedSession>,
+    book_id: String,
+    os_path: String,
+) -> CoreResult<Book> {
+    add_resource_from_path_impl(&session, &book_id, &os_path)
 }
 
 #[tauri::command]
@@ -403,6 +450,45 @@ mod tests {
         let book = create_book_impl(&session, metadata("Perm")).unwrap();
         let err = reorder_spine_impl(&session, &book.id, &["bogus".to_string()]).unwrap_err();
         assert!(matches!(err, CoreError::MalformedPackage { .. }));
+    }
+
+    #[test]
+    fn add_resource_from_path_reads_and_stores_the_image() {
+        let dir = std::env::temp_dir().join(format!("epubzilla-app-m3-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("Cövèr Art.PNG");
+        let bytes: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 1, 2, 3, 4];
+        std::fs::write(&img, &bytes).unwrap();
+
+        let session: SharedSession = Mutex::new(Session::new());
+        let book = create_book_impl(&session, metadata("Ïmage Bòok ✓")).unwrap();
+        let book = add_resource_from_path_impl(&session, &book.id, img.to_str().unwrap()).unwrap();
+
+        assert!(book.dirty);
+        let added = book
+            .resources
+            .iter()
+            .find(|r| r.path == "OEBPS/images/Cövèr-Art.png")
+            .unwrap();
+        assert_eq!(added.media_type, "image/png");
+        assert_eq!(added.size, bytes.len() as u64);
+        assert_eq!(
+            read_resource_impl(&session, &book.id, &added.id).unwrap(),
+            bytes
+        );
+    }
+
+    #[test]
+    fn add_resource_from_path_rejects_unsupported_and_missing_files() {
+        let session: SharedSession = Mutex::new(Session::new());
+        let book = create_book_impl(&session, metadata("Ïmage Errs")).unwrap();
+
+        let err = add_resource_from_path_impl(&session, &book.id, "/pics/movie.mp4").unwrap_err();
+        assert!(matches!(err, CoreError::UnsupportedFeature { .. }));
+        let err = add_resource_from_path_impl(&session, &book.id, "/pics/none").unwrap_err();
+        assert!(matches!(err, CoreError::UnsupportedFeature { .. }));
+        let err = add_resource_from_path_impl(&session, &book.id, "/no/such/file.png").unwrap_err();
+        assert!(matches!(err, CoreError::Io { .. }));
     }
 
     /// The IPC error contract: command failures serialize as the serde form

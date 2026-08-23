@@ -181,7 +181,7 @@ export function ReaderPane() {
             className="edit-toggle"
             onClick={startEditing}
             disabled={status === "loading-chapter"}
-            title="Edit this chapter"
+            title="Edit this chapter (Ctrl/Cmd+E)"
           >
             Edit
           </button>

@@ -127,6 +127,18 @@ export function reorderSpine(bookId: string, order: string[]): Promise<Book> {
   return invoke<Book>("reorder_spine", { bookId, order });
 }
 
+/**
+ * Read an image file from an OS path and add it to the book (M3.3). The
+ * backend reads the bytes and infers the media type from the extension, so
+ * file content never crosses IPC twice.
+ */
+export function addResourceFromPath(
+  bookId: string,
+  osPath: string,
+): Promise<Book> {
+  return invoke<Book>("add_resource_from_path", { bookId, osPath });
+}
+
 /** Native validation subset (ADR-0003). Findings are values, not rejections. */
 export function validateBook(bookId: string): Promise<ValidationIssue[]> {
   return invoke<ValidationIssue[]>("validate", { bookId });

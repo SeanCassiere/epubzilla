@@ -14,6 +14,21 @@ export async function pickEpubFile(): Promise<string | null> {
 }
 
 /**
+ * Native open-file dialog for images to insert (M3.3). The extension list
+ * must stay in sync with the backend's media-type inference
+ * (crates/app/src/commands.rs). Resolves null on cancel.
+ */
+export async function pickImageFile(): Promise<string | null> {
+  return open({
+    multiple: false,
+    directory: false,
+    filters: [
+      { name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "svg", "webp"] },
+    ],
+  });
+}
+
+/**
  * Native save-file dialog filtered to .epub (save / save-as, M2.4).
  * Resolves null on cancel.
  */

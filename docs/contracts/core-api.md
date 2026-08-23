@@ -41,6 +41,15 @@ frontend never computes model changes itself.
 | `add_chapter` | `book_id, title: String, after: Option<SpineItemId>` | `Book` | Creates resource + spine entry + nav entry. |
 | `remove_chapter` | `book_id, spine_item_id` | `Book` | Removes spine entry, nav entries, and the resource if unreferenced. |
 | `reorder_spine` | `book_id, order: Vec<SpineItemId>` | `Book` | Must be a permutation of the current spine; nav order follows for top-level chapter entries. |
+| `add_resource_from_path` | `book_id, os_path: String` | `Book` | M3.3: reads the file at `os_path` and stores it via `Session::add_resource` — bytes never cross IPC. Media type is inferred from the extension (`png`, `jpg`, `jpeg`, `gif`, `svg`, `webp`); anything else is `UnsupportedFeature`. |
+
+`Session::add_resource(book_id, path_hint: &str, media_type: &str, bytes:
+Vec<u8>) -> CoreResult<Book>` is the core-level primitive behind
+`add_resource_from_path`: it stores the bytes in the session overlay under a
+collision-free zip-internal path derived from `path_hint`'s file name
+(`<package dir>/images/<sanitized stem>[-<n>].<ext>`, lowercased extension),
+adds the manifest `Resource` with the given media type, and sets `dirty`.
+EPUB 2 books reject it with `UnsupportedFeature` like every other mutation.
 
 ### Validation
 

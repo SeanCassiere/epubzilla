@@ -414,6 +414,43 @@ impl Session {
         Ok(open.book.clone())
     }
 
+    /// Add a binary resource (M3.3: images) to the manifest and the session
+    /// overlay. The zip-internal path is derived from `path_hint`'s file name
+    /// under `<package dir>/images/`, suffixed `-2`, `-3`, … until it collides
+    /// with nothing in the manifest; the manifest id is derived the same way.
+    /// Bytes stay in the overlay until `save_book`.
+    pub fn add_resource(
+        &mut self,
+        book_id: &str,
+        path_hint: &str,
+        media_type: &str,
+        bytes: Vec<u8>,
+    ) -> CoreResult<Book> {
+        let open = self.open_mut(book_id)?;
+        ensure_editable(&open.book)?;
+
+        let (stem, ext) = split_hint(path_hint);
+        let stem = sanitize_stem(&stem);
+        let dir = parent_dir(&open.package_path);
+        let images_dir = if dir.is_empty() {
+            "images".to_owned()
+        } else {
+            format!("{dir}/images")
+        };
+        let (resource_id, path) = unique_asset_slot(&open.book, &images_dir, &stem, ext.as_deref());
+
+        open.book.resources.push(Resource {
+            id: resource_id,
+            path: path.clone(),
+            media_type: media_type.to_owned(),
+            size: bytes.len() as u64,
+        });
+        open.overlay.insert(path.clone(), bytes);
+        open.removed.remove(&path);
+        open.book.dirty = true;
+        Ok(open.book.clone())
+    }
+
     /// Replace the book's metadata. Regenerates the generated title page (and
     /// its nav label) for books born from `create_book`.
     pub fn update_metadata(&mut self, book_id: &str, metadata: Metadata) -> CoreResult<Book> {
@@ -979,6 +1016,67 @@ fn unique_chapter_slot(book: &Book, dir: &str) -> (String, String) {
         };
         if !book.resources.iter().any(|r| r.id == id || r.path == path) {
             return (id, path);
+        }
+        n += 1;
+    }
+}
+
+/// File-name stem and lowercased extension of a path hint (OS path or bare
+/// file name; both `/` and `\` separators are understood).
+fn split_hint(path_hint: &str) -> (String, Option<String>) {
+    let file_name = path_hint.rsplit(['/', '\\']).next().unwrap_or(path_hint);
+    match file_name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => {
+            (stem.to_owned(), Some(ext.to_ascii_lowercase()))
+        }
+        _ => (file_name.to_owned(), None),
+    }
+}
+
+/// Zip-path-safe stem: Unicode alphanumerics, `-`, and `_` pass through
+/// (UTF-8 safe); everything else collapses to single dashes.
+fn sanitize_stem(stem: &str) -> String {
+    let mut out = String::with_capacity(stem.len());
+    for c in stem.chars() {
+        if c.is_alphanumeric() || c == '-' || c == '_' {
+            out.push(c);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let out = out.trim_matches('-').to_owned();
+    if out.is_empty() {
+        "resource".to_owned()
+    } else {
+        out
+    }
+}
+
+/// First collision-free `(manifest id, zip path)` pair for an asset named
+/// after `stem` in `dir`: `stem[.ext]`, then `stem-2[.ext]`, `stem-3[.ext]`, …
+fn unique_asset_slot(book: &Book, dir: &str, stem: &str, ext: Option<&str>) -> (String, String) {
+    let mut n = 1usize;
+    loop {
+        let candidate = if n == 1 {
+            stem.to_owned()
+        } else {
+            format!("{stem}-{n}")
+        };
+        let file_name = match ext {
+            Some(ext) => format!("{candidate}.{ext}"),
+            None => candidate.clone(),
+        };
+        let path = if dir.is_empty() {
+            file_name
+        } else {
+            format!("{dir}/{file_name}")
+        };
+        if !book
+            .resources
+            .iter()
+            .any(|r| r.id == candidate || r.path == path)
+        {
+            return (candidate, path);
         }
         n += 1;
     }
@@ -1623,6 +1721,139 @@ mod tests {
             format: ContentFormat::Markdown,
             content: content.to_owned(),
         }
+    }
+
+    /// A tiny valid 1x1 PNG; the core never decodes image bytes.
+    const PNG_1X1: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00,
+        0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    #[test]
+    fn add_resource_stores_bytes_under_images_and_sets_dirty() {
+        let mut session = Session::new();
+        let book = session.create_book(sample_metadata());
+        let book = session
+            .add_resource(
+                &book.id,
+                "/photos/Mÿ Pïc (1).PNG",
+                "image/png",
+                PNG_1X1.to_vec(),
+            )
+            .unwrap();
+
+        assert!(book.dirty);
+        assert_consistent(&book);
+        // Sanitized stem, lowercased extension, under <pkg dir>/images/.
+        let added = book
+            .resources
+            .iter()
+            .find(|r| r.path.starts_with("OEBPS/images/"))
+            .unwrap();
+        assert_eq!(added.path, "OEBPS/images/Mÿ-Pïc-1.png");
+        assert_eq!(added.id, "Mÿ-Pïc-1");
+        assert_eq!(added.media_type, "image/png");
+        assert_eq!(added.size, PNG_1X1.len() as u64);
+        // The overlay serves the bytes immediately.
+        let bytes = session.read_resource(&book.id, &added.id).unwrap();
+        assert_eq!(bytes, PNG_1X1);
+    }
+
+    #[test]
+    fn add_resource_resolves_collisions_with_numeric_suffixes() {
+        let mut session = Session::new();
+        let book = session.create_book(sample_metadata());
+        let book = session
+            .add_resource(&book.id, "foo.png", "image/png", PNG_1X1.to_vec())
+            .unwrap();
+        let book = session
+            .add_resource(&book.id, "some/dir/foo.png", "image/png", vec![1, 2, 3])
+            .unwrap();
+        let book = session
+            .add_resource(&book.id, "foo.png", "image/png", vec![4])
+            .unwrap();
+
+        assert_consistent(&book);
+        let paths: Vec<&str> = book
+            .resources
+            .iter()
+            .filter(|r| r.path.starts_with("OEBPS/images/"))
+            .map(|r| r.path.as_str())
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                "OEBPS/images/foo.png",
+                "OEBPS/images/foo-2.png",
+                "OEBPS/images/foo-3.png"
+            ]
+        );
+        // Each entry serves its own bytes.
+        assert_eq!(
+            session.read_resource(&book.id, "foo-2").unwrap(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(session.read_resource(&book.id, "foo-3").unwrap(), vec![4]);
+    }
+
+    #[test]
+    fn add_resource_rejects_epub2() {
+        let entries = vec![
+            ("mimetype", "application/epub+zip"),
+            ("META-INF/container.xml", CONTAINER_XML),
+            ("OEBPS/content.opf", EPUB2_OPF),
+            ("OEBPS/toc.ncx", NCX),
+            ("OEBPS/ch1.xhtml", CH1),
+        ];
+        let path = write_epub("addres-epub2.epub", &entries);
+        let mut session = Session::new();
+        let book = session.open_book(&path).unwrap();
+        let err = session
+            .add_resource(&book.id, "foo.png", "image/png", PNG_1X1.to_vec())
+            .unwrap_err();
+        assert!(matches!(err, CoreError::UnsupportedFeature { .. }));
+    }
+
+    #[test]
+    fn added_resource_survives_save_and_reopen() {
+        let mut session = Session::new();
+        let book = session.create_book(sample_metadata());
+        let book = session
+            .add_resource(&book.id, "pïxel.png", "image/png", PNG_1X1.to_vec())
+            .unwrap();
+        let path = temp_path("addres-roundtrip.epub");
+        session
+            .save_book(&book.id, Some(path.to_string_lossy().into_owned()))
+            .unwrap();
+
+        let reopened = session.open_book(&path).unwrap();
+        let added = reopened
+            .resources
+            .iter()
+            .find(|r| r.path == "OEBPS/images/pïxel.png")
+            .unwrap();
+        assert_eq!(added.media_type, "image/png");
+        assert_eq!(added.size, PNG_1X1.len() as u64);
+        let bytes = session.read_resource(&reopened.id, &added.id).unwrap();
+        assert_eq!(bytes, PNG_1X1);
+    }
+
+    #[test]
+    fn add_resource_hint_edge_cases() {
+        // Pure-helper checks: extension-less and hostile hints stay usable.
+        assert_eq!(split_hint("foo.PNG"), ("foo".into(), Some("png".into())));
+        assert_eq!(
+            split_hint("C:\\pics\\a b.jpeg"),
+            ("a b".into(), Some("jpeg".into()))
+        );
+        assert_eq!(split_hint("noext"), ("noext".into(), None));
+        assert_eq!(split_hint(".hidden"), (".hidden".into(), None));
+        assert_eq!(sanitize_stem("Mÿ Pïc (1)"), "Mÿ-Pïc-1");
+        assert_eq!(sanitize_stem("///"), "resource");
+        assert_eq!(sanitize_stem("__ok__"), "__ok__");
     }
 
     #[test]

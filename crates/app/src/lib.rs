@@ -29,6 +29,7 @@ pub fn run() {
             commands::add_chapter,
             commands::remove_chapter,
             commands::reorder_spine,
+            commands::add_resource_from_path,
             commands::validate,
         ])
         .register_uri_scheme_protocol("epub", |ctx, request| {

@@ -10,7 +10,7 @@
 // fallback gating is needed; the raw Markdown mode remains available for
 // editing them comfortably.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type MutableRefObject } from "react";
 import "@milkdown/kit/prose/view/style/prosemirror.css";
 import "@milkdown/kit/prose/tables/style/tables.css";
 import { Editor, defaultValueCtx, rootCtx } from "@milkdown/kit/core";
@@ -18,6 +18,7 @@ import {
   commonmark,
   createCodeBlockCommand,
   insertHrCommand,
+  insertImageCommand,
   toggleEmphasisCommand,
   toggleLinkCommand,
   toggleStrongCommand,
@@ -107,11 +108,21 @@ export function MilkdownEditor({
   value,
   onChange,
   onReady,
+  onInsertImage,
+  insertImageRef,
 }: {
   value: string;
   onChange: (next: string) => void;
   /** Test hook: called with the live editor once created. */
   onReady?: (editor: Editor) => void;
+  /** M3.3: renders an "Insert image…" toolbar button running this flow. */
+  onInsertImage?: () => void;
+  /**
+   * M3.3: while mounted, receives a function that inserts an image node
+   * for `src` at the cursor (EditorPane's insert-image flow calls it after
+   * add_resource_from_path).
+   */
+  insertImageRef?: MutableRefObject<((src: string) => void) | null>;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<Editor | null>(null);
@@ -162,6 +173,20 @@ export function MilkdownEditor({
     };
   }, []);
 
+  // Cursor-aware image insertion (M3.3): insert an image node at the
+  // cursor; the markdownUpdated listener reports the change upward.
+  useEffect(() => {
+    if (insertImageRef === undefined) return;
+    insertImageRef.current = (src: string) => {
+      const editor = editorRef.current;
+      if (editor === null) return;
+      editor.action(callCommand(insertImageCommand.key, { src }));
+    };
+    return () => {
+      insertImageRef.current = null;
+    };
+  }, [insertImageRef]);
+
   // External value replacement (buffer reload) — no-op for the editor's own
   // edits, which already set heldRef via the markdownUpdated listener. After
   // a push, hold the *serialized* form of the new document so the listener's
@@ -192,6 +217,16 @@ export function MilkdownEditor({
             {action.label}
           </button>
         ))}
+        {onInsertImage !== undefined && (
+          <button
+            type="button"
+            title="Add an image to the book and reference it at the cursor"
+            onMouseDown={(e) => e.preventDefault() /* keep the selection */}
+            onClick={onInsertImage}
+          >
+            Insert image…
+          </button>
+        )}
       </div>
       <div className="milkdown-host" ref={hostRef} />
     </div>
