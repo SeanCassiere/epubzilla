@@ -117,6 +117,16 @@ interface ReaderState {
     mediaType: string,
     bytes: Uint8Array,
   ) => Promise<Book | null>;
+  /**
+   * set_cover on the open book (issue #73): make an existing image resource
+   * the cover, or clear it with null; adopts the returned Book.
+   */
+  setCover: (resourceId: string | null) => Promise<boolean>;
+  /**
+   * set_cover_from_path on the open book (issue #73): add an image file and
+   * make it the cover in one command; adopts the returned Book.
+   */
+  setCoverFromFile: (osPath: string) => Promise<boolean>;
 }
 
 /** Live view of the editor's chapter buffer (see setEditorBuffer). */
@@ -460,6 +470,26 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
     [book, applyEdit],
   );
 
+  const setCover = useCallback(
+    async (resourceId: string | null): Promise<boolean> => {
+      if (book === null) return false;
+      const updated = await applyEdit(() => api.setCover(book.id, resourceId));
+      return updated !== null;
+    },
+    [book, applyEdit],
+  );
+
+  const setCoverFromFile = useCallback(
+    async (osPath: string): Promise<boolean> => {
+      if (book === null) return false;
+      const updated = await applyEdit(() =>
+        api.setCoverFromPath(book.id, osPath),
+      );
+      return updated !== null;
+    },
+    [book, applyEdit],
+  );
+
   const writeChapter = useCallback(
     async (content: ChapterContent): Promise<boolean> => {
       if (book === null) return false;
@@ -501,6 +531,8 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       applyEditorBuffer,
       addResource,
       addResourceBytes,
+      setCover,
+      setCoverFromFile,
     }),
     [
       book,
@@ -531,6 +563,8 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       applyEditorBuffer,
       addResource,
       addResourceBytes,
+      setCover,
+      setCoverFromFile,
     ],
   );
 

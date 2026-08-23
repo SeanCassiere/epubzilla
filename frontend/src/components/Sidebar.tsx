@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useReader } from "../state/reader";
+import { resourceUrl } from "../lib/api";
 import { TocSidebar } from "./TocSidebar";
 import { ChapterPanel } from "./ChapterPanel";
 
@@ -28,8 +29,22 @@ export function Sidebar() {
     </button>
   );
 
+  // Current cover (issue #73), shown above the tabs when the book has one.
+  const cover =
+    book.metadata.cover_resource !== null
+      ? (book.resources.find((r) => r.id === book.metadata.cover_resource) ??
+        null)
+      : null;
+
   return (
     <div className="sidebar">
+      {cover !== null && (
+        <img
+          className="sidebar-cover"
+          src={resourceUrl(book.id, cover.path)}
+          alt={`Cover of ${book.metadata.title}`}
+        />
+      )}
       <div className="sidebar-tabs" role="tablist" aria-label="Sidebar panels">
         {tabButton("contents", "Contents")}
         {tabButton("chapters", "Chapters")}
