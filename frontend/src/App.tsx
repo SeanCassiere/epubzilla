@@ -1,17 +1,16 @@
 import { ReaderProvider, useReader } from "./state/reader";
 import { Header } from "./components/Header";
 import { ReaderPane } from "./components/ReaderPane";
-import { TocSidebar } from "./components/TocSidebar";
+import { Sidebar } from "./components/Sidebar";
 import "./App.css";
 
-// Main pane: TOC sidebar (when the open book has a nav tree) + reader.
-// Keyed by book.id so per-book TOC expansion state resets on open.
+// Main pane: tabbed sidebar (TOC + chapter panel, M2.3) + reader.
+// Keyed by book.id so per-book tab/TOC expansion state resets on open.
 function MainArea() {
   const { book } = useReader();
-  const hasToc = book !== null && book.nav.length > 0;
   return (
-    <main className={hasToc ? "app-main with-toc" : "app-main"}>
-      {hasToc && <TocSidebar key={book.id} />}
+    <main className={book !== null ? "app-main with-toc" : "app-main"}>
+      {book !== null && <Sidebar key={book.id} />}
       <ReaderPane />
     </main>
   );
