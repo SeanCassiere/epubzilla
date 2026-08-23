@@ -18,6 +18,7 @@ import type { ContentFormat } from "@bindings/ContentFormat";
 import { useReader, describeError } from "../state/reader";
 import * as api from "../lib/api";
 import { imageMarkdown, relativeResourcePath } from "../lib/editing";
+import { resolveChapterUrl } from "../lib/chapter";
 import { pickImageFile } from "../lib/dialog";
 import { CodeEditor } from "./CodeEditor";
 import { MilkdownEditor } from "./MilkdownEditor";
@@ -59,6 +60,23 @@ export function EditorPane() {
   } = useReader();
   const resourceId = book?.spine[spineIndex]?.resource ?? null;
   const bookId = book?.id ?? null;
+  const chapterPath =
+    book?.resources.find((r) => r.id === resourceId)?.path ?? null;
+
+  // Render-time URL resolver (#52): maps relative resource refs in the
+  // buffer (e.g. `../images/x.png`) to epub:// asset-protocol URLs so
+  // images display inside the editor — mirroring the Reader's rewrite
+  // (prepareChapterHtml). Display only: the buffer and everything Apply
+  // sends keep the relative path; epub:// URLs are never persisted.
+  const resolveEditorUrl = useCallback(
+    (src: string): string => {
+      if (bookId === null || chapterPath === null) return src;
+      const resolved = resolveChapterUrl(chapterPath, src);
+      if (resolved === null) return src; // external/fragment/escaping: leave alone
+      return api.resourceUrl(bookId, resolved.path) + resolved.suffix;
+    },
+    [bookId, chapterPath],
+  );
 
   const [baseline, setBaseline] = useState<string | null>(null);
   const [buffer, setBuffer] = useState<string | null>(null);
@@ -266,6 +284,7 @@ export function EditorPane() {
           onChange={setBuffer}
           insertImageRef={insertImageRef}
           onInsertImage={() => void handleInsertImage()}
+          resolveUrl={resolveEditorUrl}
         />
       ) : (
         <CodeEditor
