@@ -633,3 +633,110 @@ body {
   border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
   padding: 0.25rem 0.6rem;
 }
+
+/* Validation panel (issue #72): the sidebar's "Checks" tab. */
+.validation-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.validation-controls {
+  padding: 0 0.75rem;
+}
+
+.validation-run {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.validation-run:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.validation-hint,
+.validation-summary {
+  margin: 0;
+  padding: 0 0.75rem;
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+.validation-summary {
+  font-weight: 600;
+  opacity: 1;
+}
+
+.validation-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0.75rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  overflow-y: auto;
+}
+
+.validation-issue {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.validation-severity {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-radius: 3px;
+  padding: 0 0.3rem;
+}
+
+.validation-severity-error {
+  color: #c62828;
+  border: 1px solid color-mix(in srgb, #c62828 60%, transparent);
+  background: color-mix(in srgb, #c62828 10%, transparent);
+}
+
+.validation-severity-warning {
+  color: #b26a00;
+  border: 1px solid color-mix(in srgb, #b26a00 60%, transparent);
+  background: color-mix(in srgb, #b26a00 10%, transparent);
+}
+
+.validation-message {
+  overflow-wrap: anywhere;
+}
+
+.validation-location {
+  font: inherit;
+  font-size: 0.8rem;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  opacity: 0.8;
+}
+
+.validation-location:hover {
+  opacity: 1;
+}
+
+.validation-location-plain {
+  font-size: 0.8rem;
+  opacity: 0.6;
+}
