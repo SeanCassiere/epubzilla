@@ -1,12 +1,14 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { NavPoint } from "@bindings/NavPoint";
 import { useReader } from "../state/reader";
 import {
   ancestorKeys,
   findCurrentTocPath,
   isNodeExpanded,
+  parentKey,
   pathKey,
   splitHref,
+  tocKeyIntent,
 } from "../lib/toc";
 
 /**
@@ -48,16 +50,85 @@ export function TocSidebar() {
     [currentTocPath],
   );
 
+  // Tree keyboard navigation (issue #74): standard tree-view keys over the
+  // VISIBLE rows (collapsed subtrees are unmounted, so a DOM query in
+  // document order is exactly the visible list). Handled on the tree root
+  // via bubbling; stopPropagation keeps ArrowLeft/Right away from the
+  // reader's chapter-nav listener while focus is in the tree.
+  const treeRef = useRef<HTMLUListElement | null>(null);
+
   if (book === null || book.nav.length === 0) return null;
 
   const toggle = (key: string, expanded: boolean) => {
     setManual((prev) => new Map(prev).set(key, expanded));
   };
 
+  const handleTreeKeyDown = (event: KeyboardEvent<HTMLUListElement>) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const intent = tocKeyIntent(event.key);
+    const tree = treeRef.current;
+    if (intent === null || tree === null) return;
+    const rows = Array.from(
+      tree.querySelectorAll<HTMLElement>("[data-toc-key]"),
+    );
+    if (rows.length === 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const index = rows.indexOf(document.activeElement as HTMLElement);
+    const focusAt = (i: number) =>
+      rows[Math.max(0, Math.min(rows.length - 1, i))].focus();
+    switch (intent) {
+      case "next":
+        focusAt(index + 1); // index -1 (nothing focused) lands on row 0
+        return;
+      case "previous":
+        focusAt(index <= 0 ? 0 : index - 1);
+        return;
+      case "first":
+        focusAt(0);
+        return;
+      case "last":
+        focusAt(rows.length - 1);
+        return;
+      case "expand-or-next": {
+        if (index === -1) return focusAt(0);
+        const row = rows[index];
+        if (row.dataset.hasChildren === "true") {
+          if (row.dataset.expanded !== "true") {
+            toggle(row.dataset.tocKey as string, true);
+            return;
+          }
+          return focusAt(index + 1); // already open: enter the subtree
+        }
+        return;
+      }
+      case "collapse-or-parent": {
+        if (index === -1) return focusAt(0);
+        const row = rows[index];
+        if (row.dataset.expanded === "true") {
+          toggle(row.dataset.tocKey as string, false);
+          return;
+        }
+        const parent = parentKey(row.dataset.tocKey as string);
+        if (parent === null) return;
+        const parentRow = tree.querySelector<HTMLElement>(
+          `[data-toc-key="${parent}"]`,
+        );
+        parentRow?.focus();
+        return;
+      }
+    }
+  };
+
   return (
     <aside className="toc-sidebar" aria-label="Table of contents">
       <h2 className="toc-heading">Contents</h2>
-      <ul className="toc-list" role="tree">
+      <ul
+        className="toc-list"
+        role="tree"
+        ref={treeRef}
+        onKeyDown={handleTreeKeyDown}
+      >
         {book.nav.map((point, i) => (
           <TocNode
             key={i}
@@ -127,6 +198,9 @@ function TocNode({
           <button
             type="button"
             className="toc-link"
+            data-toc-key={key}
+            data-has-children={hasChildren ? "true" : "false"}
+            data-expanded={expanded ? "true" : "false"}
             ref={
               isCurrent
                 ? (el) => el?.scrollIntoView({ block: "nearest" })
@@ -141,6 +215,9 @@ function TocNode({
           <button
             type="button"
             className="toc-link toc-section"
+            data-toc-key={key}
+            data-has-children={hasChildren ? "true" : "false"}
+            data-expanded={expanded ? "true" : "false"}
             onClick={hasChildren ? () => onToggle(key, !expanded) : undefined}
           >
             {point.label}

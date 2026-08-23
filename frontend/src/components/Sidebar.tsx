@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useReader } from "../state/reader";
 import { resourceUrl } from "../lib/api";
+import { onShortcut } from "../lib/shortcuts";
 import { TocSidebar } from "./TocSidebar";
 import { ChapterPanel } from "./ChapterPanel";
 import { ValidationPanel } from "./ValidationPanel";
@@ -17,6 +18,39 @@ type Tab = "contents" | "chapters" | "checks";
 export function Sidebar() {
   const { book } = useReader();
   const [tab, setTab] = useState<Tab>("contents");
+
+  // Sidebar shortcuts (issue #74): Mod+1/2/3 select a tab AND move focus
+  // into its panel so the keyboard lands where the eyes do (the TOC tree
+  // focuses its current entry; other panels focus their first control).
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  useEffect(
+    () =>
+      onShortcut((action) => {
+        const target: Tab | null =
+          action === "sidebar-contents"
+            ? "contents"
+            : action === "sidebar-chapters"
+              ? "chapters"
+              : action === "sidebar-checks"
+                ? "checks"
+                : null;
+        if (target === null) return;
+        setTab(target);
+        // Focus after the panel for the (possibly new) tab has mounted.
+        requestAnimationFrame(() => {
+          const root = rootRef.current;
+          if (root === null) return;
+          const el = root.querySelector<HTMLElement>(
+            ".toc-current .toc-link, " +
+              ".sidebar-panel-focus button, .sidebar-panel-focus a[href], " +
+              ".sidebar-panel-focus input, .sidebar-panel-focus select",
+          );
+          el?.focus();
+        });
+      }),
+    [],
+  );
+
   if (book === null) return null;
 
   const tabButton = (id: Tab, label: string) => (
@@ -39,7 +73,7 @@ export function Sidebar() {
       : null;
 
   return (
-    <div className="sidebar">
+    <div className="sidebar" ref={rootRef}>
       {cover !== null && (
         <img
           className="sidebar-cover"
@@ -52,13 +86,15 @@ export function Sidebar() {
         {tabButton("chapters", "Chapters")}
         {tabButton("checks", "Checks")}
       </div>
-      {tab === "contents" ? (
-        <TocSidebar />
-      ) : tab === "chapters" ? (
-        <ChapterPanel />
-      ) : (
-        <ValidationPanel />
-      )}
+      <div className="sidebar-panel-focus">
+        {tab === "contents" ? (
+          <TocSidebar />
+        ) : tab === "chapters" ? (
+          <ChapterPanel />
+        ) : (
+          <ValidationPanel />
+        )}
+      </div>
     </div>
   );
 }

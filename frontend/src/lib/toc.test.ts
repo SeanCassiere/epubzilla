@@ -5,9 +5,11 @@ import {
   countNavPoints,
   findCurrentTocPath,
   isNodeExpanded,
+  parentKey,
   pathKey,
   shouldHandleNavKey,
   splitHref,
+  tocKeyIntent,
 } from "./toc";
 
 const point = (
@@ -125,5 +127,34 @@ describe("shouldHandleNavKey", () => {
     expect(shouldHandleNavKey("textarea", false)).toBe(false);
     expect(shouldHandleNavKey("SELECT", false)).toBe(false);
     expect(shouldHandleNavKey("DIV", true)).toBe(false);
+  });
+});
+
+describe("tocKeyIntent", () => {
+  it("maps the tree-view keys (issue #74)", () => {
+    expect(tocKeyIntent("ArrowDown")).toBe("next");
+    expect(tocKeyIntent("ArrowUp")).toBe("previous");
+    expect(tocKeyIntent("Home")).toBe("first");
+    expect(tocKeyIntent("End")).toBe("last");
+    expect(tocKeyIntent("ArrowRight")).toBe("expand-or-next");
+    expect(tocKeyIntent("ArrowLeft")).toBe("collapse-or-parent");
+  });
+
+  it("ignores everything else (activation keys stay native)", () => {
+    for (const key of ["Enter", " ", "Tab", "a", "PageDown", "Escape"]) {
+      expect(tocKeyIntent(key)).toBeNull();
+    }
+  });
+});
+
+describe("parentKey", () => {
+  it("strips the last path segment", () => {
+    expect(parentKey("0.2.1")).toBe("0.2");
+    expect(parentKey("0.2")).toBe("0");
+  });
+
+  it("returns null for roots", () => {
+    expect(parentKey("0")).toBeNull();
+    expect(parentKey("12")).toBeNull();
   });
 });

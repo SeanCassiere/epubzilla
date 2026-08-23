@@ -104,7 +104,17 @@ body {
   border-right: 1px solid color-mix(in srgb, currentColor 15%, transparent);
 }
 
-.sidebar > .toc-sidebar {
+/* Focus wrapper around the active panel (issue #74): the Mod+1/2/3
+   shortcuts move keyboard focus to the first control inside it. Layout
+   pass-through — it fills the column exactly like the panel used to. */
+.sidebar-panel-focus {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.sidebar-panel-focus > .toc-sidebar {
   flex: 1;
   border-right: 0;
 }

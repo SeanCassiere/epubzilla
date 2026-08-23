@@ -21,6 +21,7 @@ import {
   type ReadingMode,
 } from "../lib/readingMode";
 import { shouldHandleNavKey, splitHref } from "../lib/toc";
+import { handleShortcutKeydown, onShortcut } from "../lib/shortcuts";
 import * as api from "../lib/api";
 import { EditorPane } from "./EditorPane";
 
@@ -345,6 +346,12 @@ export function ReaderPane() {
       true,
     );
     doc.addEventListener("keydown", (event) => {
+      // App shortcuts first (issue #74): keydown inside the sandboxed
+      // iframe never bubbles to the parent window, so forward matches to
+      // the shared bus here. A match consumes the key.
+      handleShortcutKeydown(event);
+      if (event.defaultPrevented) return;
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
       const paginated = modeRef.current === "paginated";
       if (event.key === "ArrowLeft") {
         navigateBack();
@@ -389,6 +396,33 @@ export function ReaderPane() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [navigateBack, navigateForward]);
+
+  // Reader-owned app shortcuts (issue #74), from the shared bus (window or
+  // iframe keydown, native menu accelerators): whole-chapter navigation
+  // (Mod+Alt+Left/Right — chapter-level even in paginated mode, unlike the
+  // plain arrows), layout toggle (Mod+Shift+L), theme cycle (Mod+Shift+T).
+  useEffect(
+    () =>
+      onShortcut((action) => {
+        switch (action) {
+          case "prev-chapter":
+            void actionsRef.current.previousChapter();
+            break;
+          case "next-chapter":
+            void actionsRef.current.nextChapter();
+            break;
+          case "toggle-layout":
+            toggleMode();
+            break;
+          case "cycle-theme":
+            cycleThemePreference();
+            break;
+          default:
+            break;
+        }
+      }),
+    [toggleMode, cycleThemePreference],
+  );
 
   // Paginated mode: a window resize reflows the columns, so re-snap the
   // horizontal offset to the nearest page boundary under the new geometry.
@@ -436,7 +470,7 @@ export function ReaderPane() {
           type="button"
           onClick={() => void previousChapter()}
           disabled={!hasPrevious || status === "loading-chapter"}
-          title="Previous chapter (ArrowLeft)"
+          title="Previous chapter (ArrowLeft; Ctrl/Cmd+Alt+ArrowLeft anywhere)"
         >
           ← Previous
         </button>
@@ -447,7 +481,7 @@ export function ReaderPane() {
           type="button"
           onClick={() => void nextChapter()}
           disabled={!hasNext || status === "loading-chapter"}
-          title="Next chapter (ArrowRight)"
+          title="Next chapter (ArrowRight; Ctrl/Cmd+Alt+ArrowRight anywhere)"
         >
           Next →
         </button>
@@ -455,7 +489,7 @@ export function ReaderPane() {
           type="button"
           className="theme-toggle"
           onClick={cycleThemePreference}
-          title="Reading theme: Auto follows the system; Light/Dark force a scheme. Books with their own styling always render light."
+          title="Reading theme (Ctrl/Cmd+Shift+T): Auto follows the system; Light/Dark force a scheme. Books with their own styling always render light."
         >
           {themePreferenceLabel(themePreference)}
         </button>
@@ -463,7 +497,7 @@ export function ReaderPane() {
           type="button"
           className="mode-toggle"
           onClick={toggleMode}
-          title="Reading layout: Scrolled is a continuous column; Paginated turns viewport-height pages (arrow keys, PageUp/Down, Space, or click near the left/right edge)."
+          title="Reading layout (Ctrl/Cmd+Shift+L): Scrolled is a continuous column; Paginated turns viewport-height pages (arrow keys, PageUp/Down, Space, or click near the left/right edge)."
         >
           {readingModeLabel(readingMode)}
         </button>
