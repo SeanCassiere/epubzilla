@@ -11,9 +11,19 @@ An application for previewing, creating, and editing EPUB files — fast.
 
 ## Status
 
-**M0 (core engine) complete.** The UI-free Rust core (`crates/core`) opens,
-models, edits, and writes EPUBs per the contracts in `docs/contracts/`, with
-epubcheck-clean output and performance budgets enforced in CI. A CLI harness
+**v0.2.0 released** — grab installers for macOS, Windows, and Linux from
+[Releases](https://github.com/SeanCassiere/epubzilla/releases) (unsigned for
+now: on macOS, right-click → Open the first time).
+
+The desktop app covers the full loop: open and read EPUB 2/3 books (TOC
+navigation, faithful rendering), create new EPUB 3 books (metadata, title
+page, chapter management), and edit chapters as Markdown — WYSIWYG (Milkdown)
+or raw (CodeMirror) — with XHTML source mode for content outside the Markdown
+subset, image insertion, and atomic incremental saves that pass epubcheck.
+
+Underneath, the UI-free Rust core (`crates/core`) implements the contracts in
+`docs/contracts/`, with epubcheck-clean output and performance budgets
+enforced in CI (a 500-chapter book opens in ~5ms). A CLI harness
 (`crates/cli`) exercises the whole surface:
 
 ```sh
@@ -32,9 +42,9 @@ epubzilla-cli create --title "My Book" --author "Jane Doe" \
 epubzilla-cli validate my-book.epub
 ```
 
-Next up: M1 — Tauri shell wiring the core to a UI. See the
-[project issues](https://github.com/seancassiere/epubzilla/issues) for the
-milestone breakdown.
+Milestones M0–M3 (core, previewer, creator, editor) are complete; polish and
+platform-native refinements are tracked on the
+[M4 milestone](https://github.com/SeanCassiere/epubzilla/milestone/5).
 
 ## Development
 
