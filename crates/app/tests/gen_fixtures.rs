@@ -235,21 +235,30 @@ fn epub2_entries() -> Vec<(&'static str, Vec<u8>)> {
 }
 
 /// Open one fixture EPUB via the real Session and snapshot the command
-/// results: the `Book` plus a `ChapterContent` per spine resource.
+/// results: the `Book`, a `ChapterContent` per spine resource (as the
+/// reader requests it, `prefer: Xhtml`), and — M3.4 — the same chapters
+/// read with `prefer: Markdown` (as the editor requests them), so the
+/// frontend harness serves REAL core conversion output: in-subset chapters
+/// come back as Markdown, out-of-subset ones as the Xhtml fallback.
 fn snapshot(session: &mut Session, epub_path: &Path, out_path: &Path) {
     let book = session.open_book(epub_path).unwrap();
     let mut chapters = BTreeMap::new();
+    let mut markdown = BTreeMap::new();
     for item in &book.spine {
         let content = session
             .read_chapter(&book.id, &item.resource, ContentFormat::Xhtml)
             .unwrap();
         chapters.insert(item.resource.clone(), content);
+        let preferred = session
+            .read_chapter(&book.id, &item.resource, ContentFormat::Markdown)
+            .unwrap();
+        markdown.insert(item.resource.clone(), preferred);
     }
     // `source` is a machine-local temp path; blank it so the committed
     // fixture is deterministic (the frontend tests never depend on it).
     let mut book_json = serde_json::to_value(&book).unwrap();
     book_json["source"] = serde_json::Value::Null;
-    let json = serde_json::json!({ "book": book_json, "chapters": chapters });
+    let json = serde_json::json!({ "book": book_json, "chapters": chapters, "markdown": markdown });
     let mut text = serde_json::to_string_pretty(&json).unwrap();
     text.push('\n');
     std::fs::write(out_path, text).unwrap();

@@ -119,6 +119,7 @@ function mockBackend(fixtures: Fixture[] = []): InvokeCall[] {
         };
         open.set(book.id, {
           book,
+          markdown: {},
           chapters: {
             titlepage: {
               resource: "titlepage",

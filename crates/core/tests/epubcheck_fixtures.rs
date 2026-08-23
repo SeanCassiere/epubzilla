@@ -124,6 +124,54 @@ fn generate_epubcheck_fixtures() {
         .save_book(&book_id, Some(mutated.to_string_lossy().into_owned()))
         .unwrap();
 
+    // Fixture 4 (M3.4): the UI edit path. Open an existing book, read a
+    // chapter as the editor does (`prefer: Markdown`), edit the markdown,
+    // write_chapter, save, then REOPEN the saved file and prove
+    // read_chapter(Markdown) returns the edited markdown — a semantic
+    // round-trip through the real XHTML serialization. The saved book is
+    // left in the fixtures dir so CI's epubcheck validates it too.
+    let source = build_source_epub(&dir);
+    let book = session.open_book(&source).unwrap();
+    let read = session
+        .read_chapter(&book.id, "ch1", ContentFormat::Markdown)
+        .unwrap();
+    assert_eq!(
+        read.format,
+        ContentFormat::Markdown,
+        "fixture ch1 must be inside the round-trip subset"
+    );
+    let edited = format!(
+        "{}\n\nÉdited through the UI command path ✓ — *emphasis* survives.\n",
+        read.content.trim_end()
+    );
+    session
+        .write_chapter(
+            &book.id,
+            "ch1",
+            ChapterContent {
+                resource: "ch1".into(),
+                format: ContentFormat::Markdown,
+                content: edited.clone(),
+            },
+        )
+        .unwrap();
+    let edited_path = dir.join("edited-roundtrip.epub");
+    session
+        .save_book(&book.id, Some(edited_path.to_string_lossy().into_owned()))
+        .unwrap();
+    std::fs::remove_file(&source).unwrap();
+    let reopened = session.open_book(&edited_path).unwrap();
+    let round = session
+        .read_chapter(&reopened.id, "ch1", ContentFormat::Markdown)
+        .unwrap();
+    assert_eq!(round.format, ContentFormat::Markdown);
+    assert_eq!(round.content.trim_end(), edited.trim_end());
+    // Untouched chapter is byte-preserved semantics: still round-trips.
+    let untouched = session
+        .read_chapter(&reopened.id, "ch2", ContentFormat::Markdown)
+        .unwrap();
+    assert_eq!(untouched.format, ContentFormat::Markdown);
+
     // All must reopen cleanly; epubcheck does the deep validation in CI.
     session.open_book(&created).unwrap();
     session.open_book(&resaved).unwrap();

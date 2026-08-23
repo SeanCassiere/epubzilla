@@ -93,6 +93,7 @@ function mockBackend(fixtures: Fixture[] = []): InvokeCall[] {
         const book = newBookFromMetadata(args.metadata as Metadata);
         open.set(book.id, {
           book,
+          markdown: {},
           chapters: {
             titlepage: {
               resource: "titlepage",
