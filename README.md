@@ -4,8 +4,9 @@ A fast desktop application for previewing, creating, and editing EPUB files.
 Tauri (Rust core) + React.
 
 **[Download the latest release](https://github.com/SeanCassiere/epubzilla/releases)**
-— installers for macOS, Windows, and Linux. Builds are unsigned for now: on
-macOS, right-click → Open the first time; on Windows, SmartScreen may warn.
+— currently built for macOS (Apple Silicon); Windows and Linux builds are
+temporarily paused. Builds are unsigned for now: right-click → Open the
+first time to bypass Gatekeeper.
 
 ## Features
 
@@ -64,10 +65,12 @@ generated `crates/core/bindings/` (`@bindings/*` alias) — regenerate with
 ### Releases
 
 The release workflow (`.github/workflows/release.yml`) builds installers with
-[tauri-action](https://github.com/tauri-apps/tauri-action) for macOS
-(Apple Silicon dmg/app), Linux (AppImage/deb/rpm), and Windows (msi/nsis),
-and uploads them to a **draft** GitHub Release with notes generated from
-merged PRs since the previous tag. Review and publish the draft manually.
+[tauri-action](https://github.com/tauri-apps/tauri-action) — currently macOS
+(Apple Silicon dmg/app) only; Windows (msi/nsis) and Linux (AppImage/deb/rpm)
+targets are temporarily disabled in the workflow's matrix (a comment there
+shows how to re-enable them; CI still tests on Linux). Artifacts upload to a
+**draft** GitHub Release with notes generated from merged PRs since the
+previous tag. Review and publish the draft manually.
 
 Two ways to cut a release:
 
