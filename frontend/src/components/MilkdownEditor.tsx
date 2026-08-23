@@ -20,6 +20,7 @@ import {
   rootCtx,
 } from "@milkdown/kit/core";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
+import { TextSelection } from "@milkdown/kit/prose/state";
 import {
   commonmark,
   createCodeBlockCommand,
@@ -41,6 +42,39 @@ import {
 import { history } from "@milkdown/kit/plugin/history";
 import { listener, listenerCtx } from "@milkdown/kit/plugin/listener";
 import { callCommand, getMarkdown, replaceAll } from "@milkdown/kit/utils";
+
+/**
+ * An image arriving via clipboard paste or drag-and-drop (issue #54): the
+ * raw bytes plus what little identity the DataTransfer carries. The handler
+ * persists it as a book resource and returns the zip-relative Markdown ref
+ * to insert (or null when persisting failed).
+ */
+export type PastedImage = {
+  /** Clipboard/file name — often generic ("image.png") or empty. */
+  name: string;
+  /** MIME type as reported by the DataTransfer (e.g. "image/png"). */
+  type: string;
+  bytes: Uint8Array;
+};
+
+/**
+ * Image files in a paste/drop DataTransfer. `files` is authoritative when
+ * populated; some WebKit paste payloads only surface through `items`.
+ */
+function imageFiles(data: DataTransfer | null): File[] {
+  if (data === null) return [];
+  const files = Array.from(data.files ?? []).filter((f) =>
+    f.type.startsWith("image/"),
+  );
+  if (files.length > 0) return files;
+  const fromItems: File[] = [];
+  for (const item of Array.from(data.items ?? [])) {
+    if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
+    const file = item.getAsFile();
+    if (file !== null) fromItems.push(file);
+  }
+  return fromItems;
+}
 
 type ToolbarAction = {
   label: string;
@@ -117,6 +151,7 @@ export function MilkdownEditor({
   onInsertImage,
   insertImageRef,
   resolveUrl,
+  onPasteImage,
 }: {
   value: string;
   onChange: (next: string) => void;
@@ -138,6 +173,18 @@ export function MilkdownEditor({
    * protocol) URL so the image actually displays inside the editor.
    */
   resolveUrl?: (src: string) => string;
+  /**
+   * Issue #54: persistence hook for images arriving via clipboard paste or
+   * drag-and-drop. When set, image payloads are intercepted BEFORE
+   * ProseMirror's default paste/drop handling (which would hold them as
+   * transient blob/data URLs that never persist): the handler adds the
+   * bytes to the book and resolves to the zip-relative ref to insert —
+   * the same ref shape as the toolbar insert, so it renders through
+   * `resolveUrl` and serializes relative. Resolving null inserts nothing
+   * (persisting failed). Non-image payloads always fall through to the
+   * default handling.
+   */
+  onPasteImage?: (image: PastedImage) => Promise<string | null>;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<Editor | null>(null);
@@ -147,6 +194,37 @@ export function MilkdownEditor({
   onReadyRef.current = onReady;
   const resolveUrlRef = useRef(resolveUrl);
   resolveUrlRef.current = resolveUrl;
+  const onPasteImageRef = useRef(onPasteImage);
+  onPasteImageRef.current = onPasteImage;
+
+  // Persist pasted/dropped image files and insert their refs at the cursor.
+  // Sequential on purpose: each insert lands at the selection left by the
+  // previous one, and the Book adoption in the handler is serialized.
+  const persistImages = (files: File[]): void => {
+    void (async () => {
+      for (const file of files) {
+        const handler = onPasteImageRef.current;
+        if (handler === undefined) return;
+        let bytes: Uint8Array;
+        try {
+          bytes = new Uint8Array(await file.arrayBuffer());
+        } catch {
+          continue; // unreadable payload: skip it, keep the rest
+        }
+        const src = await handler({
+          name: file.name,
+          type: file.type,
+          bytes,
+        });
+        if (src === null) continue;
+        const editor = editorRef.current;
+        if (editor === null) return;
+        editor.action(callCommand(insertImageCommand.key, { src }));
+      }
+    })();
+  };
+  const persistImagesRef = useRef(persistImages);
+  persistImagesRef.current = persistImages;
 
   // The last markdown this editor holds — what it emitted, or the serialized
   // form of what was pushed into it. Breaks external-replacement feedback
@@ -178,6 +256,49 @@ export function MilkdownEditor({
         // src re-resolve automatically.
         ctx.update(editorViewOptionsCtx, (prev) => ({
           ...prev,
+          // Clipboard/drop image persistence (#54): image payloads are
+          // consumed here — persisted as book resources, then inserted as
+          // zip-relative refs — so ProseMirror's default handling never
+          // materializes a transient blob/data URL in the document. Anything
+          // without an image file (plain text, HTML, ...) falls through.
+          handlePaste: (view, event, slice) => {
+            if (onPasteImageRef.current !== undefined) {
+              const files = imageFiles(event.clipboardData);
+              if (files.length > 0) {
+                persistImagesRef.current(files);
+                return true;
+              }
+            }
+            return prev.handlePaste?.(view, event, slice) ?? false;
+          },
+          handleDrop: (view, event, slice, moved) => {
+            if (onPasteImageRef.current !== undefined && !moved) {
+              const files = imageFiles(event.dataTransfer);
+              if (files.length > 0) {
+                // Drop inserts at the drop point, not the old cursor. When
+                // the position cannot be determined (no layout), the current
+                // selection is the honest fallback.
+                let pos: { pos: number } | null = null;
+                try {
+                  pos = view.posAtCoords({
+                    left: event.clientX,
+                    top: event.clientY,
+                  });
+                } catch {
+                  pos = null; // no layout (tests): keep the selection
+                }
+                if (pos != null) {
+                  const tr = view.state.tr.setSelection(
+                    TextSelection.near(view.state.doc.resolve(pos.pos)),
+                  );
+                  view.dispatch(tr);
+                }
+                persistImagesRef.current(files);
+                return true;
+              }
+            }
+            return prev.handleDrop?.(view, event, slice, moved) ?? false;
+          },
           nodeViews: {
             ...prev.nodeViews,
             image: (node: ProseNode) => {

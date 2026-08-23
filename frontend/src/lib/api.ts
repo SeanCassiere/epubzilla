@@ -139,6 +139,27 @@ export function addResourceFromPath(
   return invoke<Book>("add_resource_from_path", { bookId, osPath });
 }
 
+/**
+ * Add an image to the book from in-memory bytes (issue #54: clipboard paste
+ * and drag-and-drop in the editor, where no OS path exists). `nameHint` is
+ * the clipboard/file name (used to derive the zip-internal path; the backend
+ * normalizes unreliable names) and `mediaType` the image MIME type — anything
+ * that is not a supported image type rejects with `UnsupportedFeature`.
+ */
+export function addResourceFromBytes(
+  bookId: string,
+  nameHint: string,
+  mediaType: string,
+  bytes: Uint8Array,
+): Promise<Book> {
+  return invoke<Book>("add_resource_from_bytes", {
+    bookId,
+    nameHint,
+    mediaType,
+    bytes: Array.from(bytes),
+  });
+}
+
 /** Native validation subset (ADR-0003). Findings are values, not rejections. */
 export function validateBook(bookId: string): Promise<ValidationIssue[]> {
   return invoke<ValidationIssue[]>("validate", { bookId });

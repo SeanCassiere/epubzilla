@@ -21,7 +21,7 @@ import { imageMarkdown, relativeResourcePath } from "../lib/editing";
 import { resolveChapterUrl } from "../lib/chapter";
 import { pickImageFile } from "../lib/dialog";
 import { CodeEditor } from "./CodeEditor";
-import { MilkdownEditor } from "./MilkdownEditor";
+import { MilkdownEditor, type PastedImage } from "./MilkdownEditor";
 
 type PendingLeave = { resolve: (proceed: boolean) => void } | null;
 
@@ -57,6 +57,7 @@ export function EditorPane() {
     setNavGuard,
     setEditorBuffer,
     addResource,
+    addResourceBytes,
   } = useReader();
   const resourceId = book?.spine[spineIndex]?.resource ?? null;
   const bookId = book?.id ?? null;
@@ -174,6 +175,23 @@ export function EditorPane() {
   // cursor-aware inserter; picking a file adds the resource to the book
   // and drops a Markdown image reference into the buffer.
   const insertImageRef = useRef<((src: string) => void) | null>(null);
+
+  // Zip-relative ref (from this chapter) to the ONE resource in `updated`
+  // that `known` did not contain — the image an add_resource call just
+  // created. Shared by the toolbar insert and the paste/drop path so both
+  // produce identical ref shapes.
+  const referenceForAdded = useCallback(
+    (known: ReadonlySet<string>, updated: {
+      resources: { id: string; path: string }[];
+    }): string | null => {
+      const added = updated.resources.find((r) => !known.has(r.id));
+      const chapter = updated.resources.find((r) => r.id === resourceId)?.path;
+      if (added === undefined || chapter === undefined) return null;
+      return relativeResourcePath(chapter, added.path);
+    },
+    [resourceId],
+  );
+
   const handleInsertImage = useCallback(async () => {
     if (book === null || resourceId === null) return;
     const osPath = await pickImageFile();
@@ -181,13 +199,8 @@ export function EditorPane() {
     const known = new Set(book.resources.map((r) => r.id));
     const updated = await addResource(osPath);
     if (updated === null) return;
-    // The one resource we didn't know before is the added image.
-    const added = updated.resources.find((r) => !known.has(r.id));
-    const chapterPath = updated.resources.find(
-      (r) => r.id === resourceId,
-    )?.path;
-    if (added === undefined || chapterPath === undefined) return;
-    const reference = relativeResourcePath(chapterPath, added.path);
+    const reference = referenceForAdded(known, updated);
+    if (reference === null) return;
     const insert = insertImageRef.current;
     if (insert !== null) {
       insert(reference);
@@ -199,7 +212,24 @@ export function EditorPane() {
           : `${current}\n\n${imageMarkdown(reference)}\n`,
       );
     }
-  }, [book, resourceId, addResource]);
+  }, [book, resourceId, addResource, referenceForAdded]);
+
+  // Clipboard paste / drag-and-drop images (#54): persist the bytes as a
+  // book resource (add_resource_from_bytes) and hand the WYSIWYG surface
+  // the zip-relative ref to insert — the exact pipeline of the toolbar
+  // insert, just fed by bytes instead of an OS path. Resolving null tells
+  // the surface to insert nothing (the reader state already surfaced the
+  // error).
+  const handlePasteImage = useCallback(
+    async (image: PastedImage): Promise<string | null> => {
+      if (book === null || resourceId === null) return null;
+      const known = new Set(book.resources.map((r) => r.id));
+      const updated = await addResourceBytes(image.name, image.type, image.bytes);
+      if (updated === null) return null;
+      return referenceForAdded(known, updated);
+    },
+    [book, resourceId, addResourceBytes, referenceForAdded],
+  );
 
   if (loadError !== null) {
     return (
@@ -285,6 +315,7 @@ export function EditorPane() {
           insertImageRef={insertImageRef}
           onInsertImage={() => void handleInsertImage()}
           resolveUrl={resolveEditorUrl}
+          onPasteImage={handlePasteImage}
         />
       ) : (
         <CodeEditor

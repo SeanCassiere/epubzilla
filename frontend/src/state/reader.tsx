@@ -108,6 +108,15 @@ interface ReaderState {
    * adopts and returns the updated Book (null on failure).
    */
   addResource: (osPath: string) => Promise<Book | null>;
+  /**
+   * add_resource_from_bytes on the open book (issue #54, clipboard paste /
+   * drop); adopts and returns the updated Book (null on failure).
+   */
+  addResourceBytes: (
+    nameHint: string,
+    mediaType: string,
+    bytes: Uint8Array,
+  ) => Promise<Book | null>;
 }
 
 /** Live view of the editor's chapter buffer (see setEditorBuffer). */
@@ -437,6 +446,20 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
     [book, applyEdit],
   );
 
+  const addResourceBytes = useCallback(
+    async (
+      nameHint: string,
+      mediaType: string,
+      bytes: Uint8Array,
+    ): Promise<Book | null> => {
+      if (book === null) return null;
+      return applyEdit(() =>
+        api.addResourceFromBytes(book.id, nameHint, mediaType, bytes),
+      );
+    },
+    [book, applyEdit],
+  );
+
   const writeChapter = useCallback(
     async (content: ChapterContent): Promise<boolean> => {
       if (book === null) return false;
@@ -477,6 +500,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       editorBufferModified,
       applyEditorBuffer,
       addResource,
+      addResourceBytes,
     }),
     [
       book,
@@ -506,6 +530,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       editorBufferModified,
       applyEditorBuffer,
       addResource,
+      addResourceBytes,
     ],
   );
 
