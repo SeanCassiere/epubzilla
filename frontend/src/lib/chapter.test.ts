@@ -182,6 +182,50 @@ describe("prepareChapterHtml", () => {
     expect(DEFAULT_CHAPTER_CSS).not.toContain("!important");
   });
 
+  // Issue #55: minimally-styled books get a comfortable default reading
+  // measure (max-width cap, centered column, edge padding) so they no
+  // longer render as full-width left-aligned text.
+  it("injects a default reading measure as the first style in <head>", () => {
+    const html = prepareChapterHtml(
+      chapter("<p>plain, unstyled book</p>"),
+      "OEBPS/ch1.xhtml",
+      asset,
+    );
+    expect(html).toContain("max-width: 42rem");
+    expect(html).toContain("margin-inline: auto");
+    expect(html).toContain("padding: 2rem 1.5rem 4rem");
+
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const first = doc.head.firstElementChild;
+    expect(first?.tagName.toLowerCase()).toBe("style");
+    expect(first?.getAttribute("data-epubzilla")).toBe("defaults");
+  });
+
+  it("keeps the measure low priority: book <style> rules come after, no !important", () => {
+    const html = prepareChapterHtml(
+      chapter("", `<style>body { max-width: none; margin: 0; }</style>`),
+      "OEBPS/ch1.xhtml",
+      asset,
+    );
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const styles = Array.from(doc.head.querySelectorAll("style"));
+    expect(styles).toHaveLength(2);
+    // Injected defaults first; the book's own body rule follows and wins
+    // at equal specificity (both are plain `body` element selectors).
+    expect(styles[0]?.getAttribute("data-epubzilla")).toBe("defaults");
+    expect(styles[1]?.textContent).toContain("max-width: none");
+    expect(DEFAULT_CHAPTER_CSS).not.toContain("!important");
+  });
+
+  it("carries the measure and dark-mode isolation in the same defaults block", () => {
+    // The #55 measure must not displace the #66 color-scheme isolation.
+    expect(DEFAULT_CHAPTER_CSS).toContain("color-scheme: light;");
+    expect(DEFAULT_CHAPTER_CSS).toContain("background-color: Canvas;");
+    expect(DEFAULT_CHAPTER_CSS).toContain("color: CanvasText;");
+    expect(DEFAULT_CHAPTER_CSS).toContain("max-width: 42rem;");
+    expect(DEFAULT_CHAPTER_CSS).toContain("margin-inline: auto;");
+  });
+
   // Issue #66: system dark mode must not leak into chapter rendering.
   it("pins the chapter document to a light color scheme with explicit defaults", () => {
     const html = prepareChapterHtml(chapter("<p>hi</p>"), "OEBPS/ch1.xhtml", asset);

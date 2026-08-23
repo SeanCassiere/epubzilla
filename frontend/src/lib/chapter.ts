@@ -174,6 +174,14 @@ export function stripActiveContent(doc: Document): void {
  * Injected as the FIRST style in <head> so any book stylesheet that
  * follows wins on equal specificity, and kept to low-impact properties.
  *
+ * Reading measure (issue #55): books with minimal or plain CSS otherwise
+ * render as full-width, left-aligned text ("unstyled html"). The body gets
+ * a comfortable default measure — `max-width` cap, auto horizontal margins
+ * to center the column, and padding so text never touches the viewport
+ * edges. Deliberately LOW priority: plain element selectors, no
+ * `!important`, first in <head> — a book rule that sets its own body
+ * margins, width, or measure wins at equal specificity.
+ *
  * Color-scheme isolation (issue #66): the reader document is pinned to
  * `color-scheme: light` so the surrounding app's dark mode never leaks
  * UA dark-scheme text colors into the chapter (previously `light dark`
@@ -192,7 +200,8 @@ body {
   font-family: Georgia, "Times New Roman", serif;
   line-height: 1.6;
   max-width: 42rem;
-  margin: 0 auto;
+  margin-block: 0;
+  margin-inline: auto;
   padding: 2rem 1.5rem 4rem;
 }
 img, svg, video { max-width: 100%; height: auto; }
