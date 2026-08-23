@@ -82,6 +82,7 @@
   "markdown": {
     "c1": {
       "content": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\">\n<head><title>Erstes Kapitel</title></head>\n<body>\n<h1>Erstes Kapitel</h1>\n<p>Grüße aus einem EPUB-2-Buch.</p>\n<h2 id=\"abschnitt\">Abschnitt Eins</h2>\n<p>NCX-Fragmentziel.</p>\n</body>\n</html>\n",
+      "fallback_reason": "attribute id=\"abschnitt\" on <h2>",
       "format": "Xhtml",
       "resource": "c1"
     },

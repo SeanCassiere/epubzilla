@@ -93,6 +93,7 @@ fn budgets_hold_on_500_chapter_book() {
                     resource: resource_id.clone(),
                     format: ContentFormat::Markdown,
                     content: markdown,
+                    fallback_reason: None,
                 },
             )
             .unwrap();
@@ -138,6 +139,7 @@ fn budgets_hold_on_500_chapter_book() {
                 resource: mid.clone(),
                 format: ContentFormat::Markdown,
                 content: replacement,
+                fallback_reason: None,
             },
         )
         .unwrap();

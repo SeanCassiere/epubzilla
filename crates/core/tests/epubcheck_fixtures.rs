@@ -103,6 +103,7 @@ fn generate_epubcheck_fixtures() {
                     resource: resource.clone(),
                     format: ContentFormat::Markdown,
                     content: md,
+                    fallback_reason: None,
                 },
             )
             .unwrap();
@@ -152,6 +153,7 @@ fn generate_epubcheck_fixtures() {
                 resource: "ch1".into(),
                 format: ContentFormat::Markdown,
                 content: edited.clone(),
+                fallback_reason: None,
             },
         )
         .unwrap();

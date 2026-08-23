@@ -405,6 +405,7 @@ mod tests {
                 resource: chapter_resource.clone(),
                 format: ContentFormat::Markdown,
                 content: "# One\n\nHello **markdown**.".into(),
+                fallback_reason: None,
             },
         )
         .unwrap();

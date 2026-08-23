@@ -142,7 +142,14 @@ fn extract(path: &str, chapter: &str) -> Result<(), CoreError> {
     let content = session.read_chapter(&book.id, &resource_id, ContentFormat::Markdown)?;
     match content.format {
         ContentFormat::Markdown => eprintln!("format: markdown"),
-        ContentFormat::Xhtml => eprintln!("format: xhtml (content is outside the Markdown subset)"),
+        ContentFormat::Xhtml => match &content.fallback_reason {
+            Some(reason) => {
+                eprintln!("format: xhtml (content is outside the Markdown subset: {reason})")
+            }
+            None => {
+                eprintln!("format: xhtml (content is outside the Markdown subset)")
+            }
+        },
     }
     print!("{}", content.content);
     Ok(())
@@ -208,6 +215,7 @@ fn create(
                 resource: resource_id.clone(),
                 format: ContentFormat::Markdown,
                 content: markdown,
+                fallback_reason: None,
             },
         )?;
     }

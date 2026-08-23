@@ -100,4 +100,9 @@ pub struct ChapterContent {
     /// See docs/contracts/content-roundtrip.md for when each format is used.
     pub format: ContentFormat,
     pub content: String,
+    /// When Markdown was preferred but the chapter came back as `Xhtml`,
+    /// the out-of-subset construct that forced source mode. `None` otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fallback_reason: Option<String>,
 }

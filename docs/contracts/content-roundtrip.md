@@ -39,7 +39,9 @@ Pandoc-style `[^1]` syntax.
 
 Additionally tolerated on XHTML→Markdown (mapped, not authored):
 `<b>`→`**`, `<i>`→`*`, `<s>/<strike>`→`~~`, `<div>` with only block children →
-unwrapped, `<section>` → unwrapped, whitespace-only elements → dropped.
+unwrapped, attribute-free `<section>` → unwrapped, whitespace-only elements →
+dropped. (A *single top-level* `<section>` wrapper is frame, not content —
+see "Document frame" below.)
 
 ## Outside the subset (source-mode triggers)
 
@@ -61,6 +63,19 @@ attribute annotation (`{.classname}` Pandoc-style) so book CSS keeps working.
 The XHTML `<head>` (title, CSS links, charset) is **not** part of editable
 content. The core owns it: it is preserved verbatim on round-trip, and the
 editor sees/edits only the `<body>` children.
+
+Attributes on `<body>` itself (e.g. pandoc's `epub:type="bodymatter"`) are
+part of the frame and are preserved verbatim.
+
+**Single `<section>` wrapper:** when the `<body>` content consists of exactly
+one top-level `<section>` element (plus optional surrounding whitespace), that
+`<section>` — *regardless of its attributes*, e.g. pandoc's
+`<section id="…" class="level1">` — is treated as part of the document frame:
+its open/close tags are preserved verbatim like `<head>`, and only its
+children are round-tripped. Reads convert the wrapper's children to Markdown;
+writes splice the regenerated XHTML back inside the same wrapper. Nested
+sections, or multiple sibling sections, are **content** and keep the rules
+above (attribute-free → unwrapped; any attribute → out of subset).
 
 ## Generated XHTML requirements
 

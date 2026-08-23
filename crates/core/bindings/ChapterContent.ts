@@ -8,4 +8,9 @@ export type ChapterContent = { resource: string,
 /**
  * See docs/contracts/content-roundtrip.md for when each format is used.
  */
-format: ContentFormat, content: string, };
+format: ContentFormat, content: string, 
+/**
+ * When Markdown was preferred but the chapter came back as `Xhtml`,
+ * the out-of-subset construct that forced source mode. `None` otherwise.
+ */
+fallback_reason?: string, };
