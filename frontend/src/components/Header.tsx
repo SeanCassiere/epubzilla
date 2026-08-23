@@ -10,6 +10,7 @@ import { needsUnsavedPrompt } from "../lib/editing";
 import { pickEpubFile, pickSaveEpubPath, slugifyTitle } from "../lib/dialog";
 import { destroyWindow, interceptClose, onCloseRequested } from "../lib/window";
 import { MetadataForm } from "./MetadataForm";
+import { CoverPicker } from "./CoverPicker";
 
 type DialogKind = "new-book" | "edit-metadata" | null;
 
@@ -256,6 +257,7 @@ export function Header() {
       )}
       {dialog === "edit-metadata" && book !== null && (
         <ModalDialog title="Edit metadata">
+          <CoverPicker />
           <MetadataForm
             initial={book.metadata}
             submitLabel="Save metadata"

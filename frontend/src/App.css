@@ -429,6 +429,69 @@ body {
   gap: 0.5rem;
 }
 
+/* Cover picker (issue #73): cover section of the edit-metadata dialog. */
+.cover-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+}
+
+.cover-picker-body {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.cover-thumb {
+  width: 5.5rem;
+  height: 7.5rem;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  flex: none;
+}
+
+.cover-thumb-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  opacity: 0.6;
+}
+
+.cover-picker-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.cover-picker-actions select {
+  font: inherit;
+  font-size: 0.85rem;
+  max-width: 14rem;
+}
+
+.cover-picker-note {
+  margin: 0;
+  font-size: 0.75rem;
+  opacity: 0.6;
+}
+
+/* Current cover above the sidebar tabs (issue #73). */
+.sidebar-cover {
+  display: block;
+  width: 100%;
+  max-height: 12rem;
+  object-fit: contain;
+  padding: 0.5rem 0.5rem 0;
+  box-sizing: border-box;
+}
+
 .metadata-form-actions {
   display: flex;
   justify-content: flex-end;
