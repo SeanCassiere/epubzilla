@@ -169,31 +169,19 @@ export function stripActiveContent(doc: Document): void {
   if (doc.documentElement) walk(doc.documentElement);
 }
 
+/** Render-layer reading theme requested by the reader UI. */
+export type ReadingTheme = "light" | "dark";
+
 /**
- * Minimal reading defaults for chapters that bring no CSS of their own.
- * Injected as the FIRST style in <head> so any book stylesheet that
- * follows wins on equal specificity, and kept to low-impact properties.
- *
- * Reading measure (issue #55): books with minimal or plain CSS otherwise
- * render as full-width, left-aligned text ("unstyled html"). The body gets
- * a comfortable default measure — `max-width` cap, auto horizontal margins
- * to center the column, and padding so text never touches the viewport
- * edges. Deliberately LOW priority: plain element selectors, no
- * `!important`, first in <head> — a book rule that sets its own body
- * margins, width, or measure wins at equal specificity.
- *
- * Color-scheme isolation (issue #66): the reader document is pinned to
- * `color-scheme: light` so the surrounding app's dark mode never leaks
- * UA dark-scheme text colors into the chapter (previously `light dark`
- * let macOS dark mode render white body text over the reader's white
- * background). Under the forced light scheme, `Canvas`/`CanvasText`
- * resolve to the UA's light defaults — identical to light-mode
- * rendering today — and book stylesheets still win because this style
- * comes first at equal specificity. Presentation-only: injected into
- * the rendered srcdoc at display time, never persisted into the EPUB.
+ * Shared reading defaults (issue #55): books with minimal or plain CSS
+ * otherwise render as full-width, left-aligned text ("unstyled html").
+ * The body gets a comfortable default measure — `max-width` cap, auto
+ * horizontal margins to center the column, and padding so text never
+ * touches the viewport edges. Deliberately LOW priority: plain element
+ * selectors, no `!important`, first in <head> — a book rule that sets its
+ * own body margins, width, or measure wins at equal specificity.
  */
-export const DEFAULT_CHAPTER_CSS = `
-:root { color-scheme: light; }
+const CHAPTER_BASE_CSS = `
 body {
   background-color: Canvas;
   color: CanvasText;
@@ -208,25 +196,92 @@ img, svg, video { max-width: 100%; height: auto; }
 `.trim();
 
 /**
+ * Light reading defaults — the historical rendering.
+ *
+ * Color-scheme isolation (issue #66): the reader document is pinned to
+ * `color-scheme: light` so the surrounding app's dark mode never leaks
+ * UA dark-scheme text colors into the chapter (previously `light dark`
+ * let macOS dark mode render white body text over the reader's white
+ * background). Under the forced light scheme, `Canvas`/`CanvasText`
+ * resolve to the UA's light defaults — identical to light-mode
+ * rendering today — and book stylesheets still win because this style
+ * comes first at equal specificity. Presentation-only: injected into
+ * the rendered srcdoc at display time, never persisted into the EPUB.
+ */
+export const DEFAULT_CHAPTER_CSS = `
+:root { color-scheme: light; }
+${CHAPTER_BASE_CSS}
+`.trim();
+
+/**
+ * Dark reading defaults (issue #78): same low-priority block, pinned to
+ * `color-scheme: dark` so `Canvas`/`CanvasText` resolve to the UA's dark
+ * defaults — dark page, light text, dark-scheme UA link colors. Identical
+ * mechanism to the #66 light pin, just the opposite scheme; the #55
+ * measure lives in the shared base so both themes compose with it.
+ */
+export const DARK_CHAPTER_CSS = `
+:root { color-scheme: dark; }
+${CHAPTER_BASE_CSS}
+`.trim();
+
+/**
+ * True when the chapter brings visual styling of its own (issue #78):
+ * a linked stylesheet, an embedded <style>, or an inline `style`
+ * attribute that sets colors. Such books are rendered with the light
+ * defaults even when a dark reading theme is requested — forcing a dark
+ * canvas under author-chosen colors (dark text, tinted backgrounds)
+ * would risk unreadable output, and we never rewrite author CSS.
+ *
+ * Conservative on purpose: linked stylesheets cannot be inspected here
+ * (they are separate zip resources), so any stylesheet counts as author
+ * styling. Inline `style` attributes only count when they mention color
+ * or background — purely structural inline styles (text-align, margins)
+ * are safe under either scheme.
+ */
+export function chapterHasAuthorStyling(doc: Document): boolean {
+  if (doc.querySelector('link[rel~="stylesheet" i]') !== null) return true;
+  if (doc.querySelector("style:not([data-epubzilla])") !== null) return true;
+  for (const el of Array.from(doc.querySelectorAll("[style]"))) {
+    const inline = el.getAttribute("style") ?? "";
+    if (/(?:^|[\s;{])(?:background|color|border-color)/i.test(inline)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Full pipeline: XHTML string -> sanitized, URL-rewritten HTML string
  * ready for `<iframe srcdoc>`. `chapterPath` is the chapter's own
  * zip-internal path (`Resource.path`); `resourceUrl` maps zip-internal
  * paths to asset-protocol URLs (api.resourceUrl bound to the book id).
+ *
+ * `theme` is the requested reading theme (default "light", the
+ * historical rendering). A dark request is honored only for
+ * minimally-styled chapters (see chapterHasAuthorStyling) — author-styled
+ * books keep the pinned-light #66 rendering so their own colors stay
+ * readable. Theming is presentation-only: it lives in the injected
+ * defaults block of the rendered srcdoc and never touches stored EPUB
+ * content.
  */
 export function prepareChapterHtml(
   xhtml: string,
   chapterPath: string,
   resourceUrl: ResourceUrlResolver,
   xhtmlPaths: ReadonlySet<string> = new Set(),
+  theme: ReadingTheme = "light",
 ): string {
   const doc = new DOMParser().parseFromString(xhtml, "text/html");
   stripActiveContent(doc);
   rewriteResourceUrls(doc, chapterPath, resourceUrl);
   annotateChapterLinks(doc, chapterPath, xhtmlPaths);
 
+  const renderDark = theme === "dark" && !chapterHasAuthorStyling(doc);
   const style = doc.createElement("style");
   style.setAttribute("data-epubzilla", "defaults");
-  style.textContent = DEFAULT_CHAPTER_CSS;
+  style.setAttribute("data-epubzilla-theme", renderDark ? "dark" : "light");
+  style.textContent = renderDark ? DARK_CHAPTER_CSS : DEFAULT_CHAPTER_CSS;
   const head = doc.head;
   head.insertBefore(style, head.firstChild);
 

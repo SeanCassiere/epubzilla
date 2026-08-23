@@ -12,6 +12,8 @@ export default defineConfig({
   test: {
     // chapter.ts uses DOMParser; jsdom stands in for the webview.
     environment: "jsdom",
+    // matchMedia + localStorage stubs and per-test scheme/storage reset.
+    setupFiles: ["src/test/setup.ts"],
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
   },
 });
