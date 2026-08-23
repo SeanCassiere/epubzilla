@@ -16,6 +16,7 @@ import {
 import type { Book } from "@bindings/Book";
 import type { ChapterContent } from "@bindings/ChapterContent";
 import type { Metadata } from "@bindings/Metadata";
+import type { ValidationIssue } from "@bindings/ValidationIssue";
 import * as api from "../lib/api";
 
 export type ReaderStatus = "idle" | "opening" | "loading-chapter" | "ready";
@@ -127,6 +128,18 @@ interface ReaderState {
    * make it the cover in one command; adopts the returned Book.
    */
   setCoverFromFile: (osPath: string) => Promise<boolean>;
+  /**
+   * Findings from the last `validate` run (issue #72, ADR-0003 native
+   * subset). Null means "not run against the current model": results are
+   * cleared whenever the model changes (edits, metadata, new book) so the
+   * panel never shows stale findings, and refreshed automatically after a
+   * successful save.
+   */
+  validation: ValidationIssue[] | null;
+  /** Whether a `validate` command is currently in flight. */
+  validating: boolean;
+  /** Run `validate` on the open book and store the findings. */
+  runValidation: () => Promise<void>;
 }
 
 /** Live view of the editor's chapter buffer (see setEditorBuffer). */
@@ -155,6 +168,8 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<ReaderStatus>("idle");
   const [error, setError] = useState<unknown>(null);
   const [editing, setEditing] = useState(false);
+  const [validation, setValidation] = useState<ValidationIssue[] | null>(null);
+  const [validating, setValidating] = useState(false);
 
   // Editor veto for chapter-leaving navigation (see setNavGuard docs).
   const navGuardRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -213,6 +228,29 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
   );
 
   /**
+   * Run `validate` for `bookId` and store the findings (issue #72). A
+   * command rejection lands in `error` (rendered by the header) and clears
+   * any previous findings.
+   */
+  const refreshValidation = useCallback(async (bookId: string) => {
+    setValidating(true);
+    try {
+      const issues = await api.validateBook(bookId);
+      setValidation(issues);
+    } catch (err) {
+      setError(err);
+      setValidation(null);
+    } finally {
+      setValidating(false);
+    }
+  }, []);
+
+  const runValidation = useCallback(async () => {
+    if (book === null) return;
+    await refreshValidation(book.id);
+  }, [book, refreshValidation]);
+
+  /**
    * Make `next` the open book (from open_book OR create_book — both return
    * a full Book that slots in identically) and load its first linear
    * chapter. Resolves true on success.
@@ -230,6 +268,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
         const next = await acquire();
         setBook(next);
         setChapter(null);
+        setValidation(null);
         if (previous !== null && previous.id !== next.id) {
           // Best-effort session cleanup; ignore failures.
           api.closeBook(previous.id).catch(() => undefined);
@@ -272,6 +311,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
         // Same book, same spine position — only the model (and dirty flag,
         // displayed from M2.4) changed.
         setBook(updated);
+        setValidation(null);
         return true;
       } catch (err) {
         setError(err);
@@ -296,6 +336,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       try {
         const updated = await mutate();
         setBook(updated);
+        setValidation(null);
         if (currentId !== null) {
           const kept = updated.spine.findIndex((s) => s.id === currentId);
           if (kept !== -1) setSpineIndex(kept);
@@ -383,13 +424,17 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
         // Same book, same spine position — only `dirty`, `source`, and
         // `dcterms:modified` changed.
         setBook(saved);
+        // Issue #72: re-check automatically after every save so the panel
+        // reflects what was just written. Fire-and-forget: findings (or a
+        // rejection, via `error`) land when they land — save stays snappy.
+        void refreshValidation(saved.id);
         return true;
       } catch (err) {
         setError(err);
         return false;
       }
     },
-    [book],
+    [book, refreshValidation],
   );
 
   const goTo = useCallback(
@@ -533,6 +578,9 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       addResourceBytes,
       setCover,
       setCoverFromFile,
+      validation,
+      validating,
+      runValidation,
     }),
     [
       book,
@@ -565,6 +613,9 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       addResourceBytes,
       setCover,
       setCoverFromFile,
+      validation,
+      validating,
+      runValidation,
     ],
   );
 
