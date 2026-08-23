@@ -152,21 +152,27 @@ export function stripActiveContent(doc: Document): void {
   for (const script of Array.from(doc.querySelectorAll("script"))) {
     script.remove();
   }
-  const walk = (el: Element): void => {
-    for (const attr of Array.from(el.attributes)) {
-      const name = attr.name.toLowerCase();
+  // One static snapshot instead of a recursive walk over live `children`
+  // collections (issue #76): live-HTMLCollection indexing degrades to
+  // O(n²) on huge flat chapters in some DOM implementations, which made
+  // multi-MB chapters visibly hang render prep. querySelectorAll("*")
+  // includes the document element and is a static, linear pass.
+  for (const el of Array.from(doc.querySelectorAll("*"))) {
+    for (const attrName of el.getAttributeNames()) {
+      const name = attrName.toLowerCase();
       if (name.startsWith("on")) {
-        el.removeAttribute(attr.name);
+        el.removeAttribute(attrName);
       } else if (
         (name === "href" || name === "src" || name === "xlink:href") &&
-        attr.value.trim().toLowerCase().startsWith("javascript:")
+        (el.getAttribute(attrName) ?? "")
+          .trim()
+          .toLowerCase()
+          .startsWith("javascript:")
       ) {
-        el.removeAttribute(attr.name);
+        el.removeAttribute(attrName);
       }
     }
-    for (const child of Array.from(el.children)) walk(child);
-  };
-  if (doc.documentElement) walk(doc.documentElement);
+  }
 }
 
 /** Render-layer reading theme requested by the reader UI. */
