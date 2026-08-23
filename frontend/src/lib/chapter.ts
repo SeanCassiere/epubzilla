@@ -173,10 +173,22 @@ export function stripActiveContent(doc: Document): void {
  * Minimal reading defaults for chapters that bring no CSS of their own.
  * Injected as the FIRST style in <head> so any book stylesheet that
  * follows wins on equal specificity, and kept to low-impact properties.
+ *
+ * Color-scheme isolation (issue #66): the reader document is pinned to
+ * `color-scheme: light` so the surrounding app's dark mode never leaks
+ * UA dark-scheme text colors into the chapter (previously `light dark`
+ * let macOS dark mode render white body text over the reader's white
+ * background). Under the forced light scheme, `Canvas`/`CanvasText`
+ * resolve to the UA's light defaults — identical to light-mode
+ * rendering today — and book stylesheets still win because this style
+ * comes first at equal specificity. Presentation-only: injected into
+ * the rendered srcdoc at display time, never persisted into the EPUB.
  */
 export const DEFAULT_CHAPTER_CSS = `
-:root { color-scheme: light dark; }
+:root { color-scheme: light; }
 body {
+  background-color: Canvas;
+  color: CanvasText;
   font-family: Georgia, "Times New Roman", serif;
   line-height: 1.6;
   max-width: 42rem;

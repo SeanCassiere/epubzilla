@@ -179,6 +179,27 @@ describe("open an EPUB 3 (real fixture data over mocked IPC)", () => {
     expect(srcdoc).not.toContain('href="https://example.com/"');
   });
 
+  // Issue #66: with the OS in dark mode the app chrome goes dark, but the
+  // reader document must stay isolated on a light color scheme so UA
+  // dark-scheme text colors never render white-on-white chapter text.
+  it("isolates the reader iframe on a light color scheme without touching stored chapter content", async () => {
+    const fixture = epub3Fixture();
+    const storedContent = fixture.chapters["ch1"].content;
+    mockBackend({ fixtures: [fixture] });
+    render(<App />);
+    await openViaDialog("Épübzïlla — 世界の本 ✓");
+
+    const srcdoc = chapterSrcdoc();
+    // Presentation layer present in the rendered iframe doc only.
+    expect(srcdoc).toContain('data-epubzilla="defaults"');
+    expect(srcdoc).toContain("color-scheme: light;");
+    expect(srcdoc).not.toContain("color-scheme: light dark");
+    // Stored chapter content is byte-identical: no theme styles persisted.
+    expect(fixture.chapters["ch1"].content).toBe(storedContent);
+    expect(storedContent).not.toContain("data-epubzilla");
+    expect(storedContent).not.toContain("color-scheme");
+  });
+
   it("navigates on TOC clicks: right resource, fragment handling, moving highlight", async () => {
     const calls = mockBackend({ fixtures: [epub3Fixture()] });
     render(<App />);

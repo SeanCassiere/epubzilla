@@ -182,6 +182,28 @@ describe("prepareChapterHtml", () => {
     expect(DEFAULT_CHAPTER_CSS).not.toContain("!important");
   });
 
+  // Issue #66: system dark mode must not leak into chapter rendering.
+  it("pins the chapter document to a light color scheme with explicit defaults", () => {
+    const html = prepareChapterHtml(chapter("<p>hi</p>"), "OEBPS/ch1.xhtml", asset);
+    expect(html).toContain("color-scheme: light;");
+    expect(html).not.toContain("color-scheme: light dark");
+    // Explicit render-layer background/text defaults (light-scheme UA
+    // values), overridable by book CSS at equal specificity.
+    expect(DEFAULT_CHAPTER_CSS).toContain("background-color: Canvas;");
+    expect(DEFAULT_CHAPTER_CSS).toContain("color: CanvasText;");
+    expect(DEFAULT_CHAPTER_CSS).not.toContain("!important");
+  });
+
+  it("keeps theming presentation-only: input markup is not the source of the injected style", () => {
+    const source = chapter("<p>body text</p>");
+    const html = prepareChapterHtml(source, "OEBPS/ch1.xhtml", asset);
+    // The stored chapter never contains the injected presentation layer…
+    expect(source).not.toContain("data-epubzilla");
+    expect(source).not.toContain("color-scheme");
+    // …it exists only in the rendered srcdoc.
+    expect(html).toContain('data-epubzilla="defaults"');
+  });
+
   it("preserves UTF-8 text content", () => {
     const html = prepareChapterHtml(
       chapter(`<p>café にほん \u{1f4d6}</p>`),
