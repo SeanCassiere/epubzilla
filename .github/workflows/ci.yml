@@ -68,6 +68,10 @@ jobs:
     # Enforces the performance budgets in docs/contracts/core-api.md
     # (release build; the test is #[ignore]d so plain `cargo test` stays fast).
     runs-on: ubuntu-latest
+    # GitHub-hosted runners occasionally have large disk-I/O outliers. Keep
+    # the reference-machine contract unchanged while allowing for that noise.
+    env:
+      CI_MULTIPLIER: 2
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

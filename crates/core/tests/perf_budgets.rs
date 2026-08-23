@@ -249,11 +249,11 @@ fn budgets_hold_on_500_chapter_book() {
 
     let t = measure(&path);
     assert_eq!(t.spine_len, CHAPTER_COUNT + 1); // + generated title page
-    println!("open_book:     {:?} (budget 1000 ms)", t.open);
-    println!("read_chapter:  {:?} (budget 50 ms)", t.read);
-    println!("write_chapter: {:?} (budget 50 ms)", t.write);
-    println!("save_book:     {:?} (budget 500 ms)", t.save);
-    println!("validate:      {:?} (budget 500 ms)", t.validate);
+    println!("open_book:     {:?} (budget {:?})", t.open, budget(1000));
+    println!("read_chapter:  {:?} (budget {:?})", t.read, budget(50));
+    println!("write_chapter: {:?} (budget {:?})", t.write, budget(50));
+    println!("save_book:     {:?} (budget {:?})", t.save, budget(500));
+    println!("validate:      {:?} (budget {:?})", t.validate, budget(500));
 
     let _ = std::fs::remove_file(&path);
 
@@ -289,11 +289,11 @@ fn budgets_hold_on_image_heavy_book() {
 
     let t = measure(&path);
     assert_eq!(t.spine_len, IMAGE_CHAPTER_COUNT + 1); // + generated title page
-    println!("open_book:     {:?} (budget 1000 ms)", t.open);
-    println!("read_chapter:  {:?} (budget 50 ms)", t.read);
-    println!("write_chapter: {:?} (budget 50 ms)", t.write);
-    println!("save_book:     {:?} (budget 500 ms)", t.save);
-    println!("validate:      {:?} (budget 500 ms)", t.validate);
+    println!("open_book:     {:?} (budget {:?})", t.open, budget(1000));
+    println!("read_chapter:  {:?} (budget {:?})", t.read, budget(50));
+    println!("write_chapter: {:?} (budget {:?})", t.write, budget(50));
+    println!("save_book:     {:?} (budget {:?})", t.save, budget(500));
+    println!("validate:      {:?} (budget {:?})", t.validate, budget(500));
 
     let _ = std::fs::remove_file(&path);
 
