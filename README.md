@@ -5,8 +5,13 @@ Tauri (Rust core) + React.
 
 **[Download the latest release](https://github.com/SeanCassiere/epubzilla/releases)**
 — currently built for macOS (Apple Silicon); Windows and Linux builds are
-temporarily paused. Builds are unsigned for now: right-click → Open the
-first time to bypass Gatekeeper.
+temporarily paused. Builds are unsigned for now, so downloaded copies are
+quarantined and macOS reports the app as "damaged". Clear the flag once
+after installing:
+
+```sh
+xattr -cr /Applications/epubzilla.app
+```
 
 ## Features
 
@@ -89,10 +94,10 @@ Two ways to cut a release:
    git push && git push --tags
    ```
 
-Builds are currently unsigned: on macOS, right-click the app and choose
-"Open" the first time to bypass Gatekeeper; on Windows, SmartScreen may warn
-("More info" > "Run anyway"). Signing/notarization is a follow-up once
-identities exist.
+Builds are currently unsigned: macOS quarantines downloaded copies and
+reports the app as "damaged" — clear it with
+`xattr -cr /Applications/epubzilla.app` (see the note at the top of this
+README). Signing/notarization is tracked in issue #65.
 
 ## License
 
