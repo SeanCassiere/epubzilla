@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  DARK_CHAPTER_CSS,
   DEFAULT_CHAPTER_CSS,
+  chapterHasAuthorStyling,
   isExternalOrFragment,
   prepareChapterHtml,
   resolveChapterUrl,
@@ -248,6 +250,113 @@ describe("prepareChapterHtml", () => {
     expect(html).toContain('data-epubzilla="defaults"');
   });
 
+  // Issue #78: dark reading theme at the render layer only.
+  describe("dark reading theme", () => {
+    it("pins a minimally-styled chapter to a dark color scheme", () => {
+      const html = prepareChapterHtml(
+        chapter("<p>plain book</p>"),
+        "OEBPS/ch1.xhtml",
+        asset,
+        new Set(),
+        "dark",
+      );
+      expect(html).toContain("color-scheme: dark;");
+      expect(html).not.toContain("color-scheme: light");
+      expect(html).toContain('data-epubzilla-theme="dark"');
+      // Same Canvas/CanvasText mechanism as #66 — under the dark pin they
+      // resolve to the UA's dark page/light text.
+      expect(DARK_CHAPTER_CSS).toContain("background-color: Canvas;");
+      expect(DARK_CHAPTER_CSS).toContain("color: CanvasText;");
+      expect(DARK_CHAPTER_CSS).not.toContain("!important");
+    });
+
+    it("keeps the #55 reading measure in the dark defaults", () => {
+      const html = prepareChapterHtml(
+        chapter("<p>plain book</p>"),
+        "OEBPS/ch1.xhtml",
+        asset,
+        new Set(),
+        "dark",
+      );
+      expect(html).toContain("max-width: 42rem");
+      expect(html).toContain("margin-inline: auto");
+      expect(html).toContain("padding: 2rem 1.5rem 4rem");
+      expect(DARK_CHAPTER_CSS).toContain("max-width: 42rem;");
+    });
+
+    it("keeps author-styled chapters light: linked stylesheet", () => {
+      const html = prepareChapterHtml(
+        chapter("", `<link rel="stylesheet" href="book.css"/>`),
+        "OEBPS/ch1.xhtml",
+        asset,
+        new Set(),
+        "dark",
+      );
+      expect(html).toContain("color-scheme: light;");
+      expect(html).not.toContain("color-scheme: dark");
+      expect(html).toContain('data-epubzilla-theme="light"');
+    });
+
+    it("keeps author-styled chapters light: embedded <style>", () => {
+      const html = prepareChapterHtml(
+        chapter("", `<style>p { color: #333; }</style>`),
+        "OEBPS/ch1.xhtml",
+        asset,
+        new Set(),
+        "dark",
+      );
+      expect(html).toContain("color-scheme: light;");
+      expect(html).not.toContain("color-scheme: dark");
+    });
+
+    it("keeps author-styled chapters light: inline color styles", () => {
+      const html = prepareChapterHtml(
+        chapter(`<p style="color: navy">tinted</p>`),
+        "OEBPS/ch1.xhtml",
+        asset,
+        new Set(),
+        "dark",
+      );
+      expect(html).toContain("color-scheme: light;");
+      expect(html).not.toContain("color-scheme: dark");
+    });
+
+    it("treats structural inline styles as minimally styled", () => {
+      const html = prepareChapterHtml(
+        chapter(`<p style="text-align: center; margin-top: 2em">hi</p>`),
+        "OEBPS/ch1.xhtml",
+        asset,
+        new Set(),
+        "dark",
+      );
+      expect(html).toContain("color-scheme: dark;");
+    });
+
+    it("theming stays presentation-only under dark too", () => {
+      const source = chapter("<p>body text</p>");
+      const html = prepareChapterHtml(
+        source,
+        "OEBPS/ch1.xhtml",
+        asset,
+        new Set(),
+        "dark",
+      );
+      expect(source).not.toContain("data-epubzilla");
+      expect(source).not.toContain("color-scheme");
+      expect(html).toContain('data-epubzilla="defaults"');
+    });
+
+    it("defaults to light when no theme is passed (unchanged behavior)", () => {
+      const html = prepareChapterHtml(
+        chapter("<p>hi</p>"),
+        "OEBPS/ch1.xhtml",
+        asset,
+      );
+      expect(html).toContain("color-scheme: light;");
+      expect(html).toContain('data-epubzilla-theme="light"');
+    });
+  });
+
   it("preserves UTF-8 text content", () => {
     const html = prepareChapterHtml(
       chapter(`<p>café にほん \u{1f4d6}</p>`),
@@ -255,6 +364,59 @@ describe("prepareChapterHtml", () => {
       asset,
     );
     expect(html).toContain("café にほん \u{1f4d6}");
+  });
+});
+
+describe("chapterHasAuthorStyling", () => {
+  const parse = (html: string): Document =>
+    new DOMParser().parseFromString(html, "text/html");
+
+  it("is false for a bare chapter", () => {
+    expect(
+      chapterHasAuthorStyling(parse("<html><head></head><body><p>x</p></body></html>")),
+    ).toBe(false);
+  });
+
+  it("is true for any linked stylesheet (case-insensitive rel)", () => {
+    expect(
+      chapterHasAuthorStyling(
+        parse(`<html><head><link rel="STYLESHEET" href="a.css"></head><body></body></html>`),
+      ),
+    ).toBe(true);
+  });
+
+  it("is true for an embedded style element", () => {
+    expect(
+      chapterHasAuthorStyling(
+        parse(`<html><head><style>p{margin:0}</style></head><body></body></html>`),
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores the reader's own injected defaults", () => {
+    expect(
+      chapterHasAuthorStyling(
+        parse(
+          `<html><head><style data-epubzilla="defaults">body{}</style></head><body></body></html>`,
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it("is true for inline background styles", () => {
+    expect(
+      chapterHasAuthorStyling(
+        parse(`<html><body><div style="background: #fff">x</div></body></html>`),
+      ),
+    ).toBe(true);
+  });
+
+  it("is false for structural inline styles", () => {
+    expect(
+      chapterHasAuthorStyling(
+        parse(`<html><body><div style="text-align: right; padding: 1em">x</div></body></html>`),
+      ),
+    ).toBe(false);
   });
 });
 

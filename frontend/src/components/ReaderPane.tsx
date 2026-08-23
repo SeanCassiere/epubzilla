@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useReader, findLinear } from "../state/reader";
 import { prepareChapterHtml } from "../lib/chapter";
+import {
+  THEME_STORAGE_KEY,
+  nextThemePreference,
+  parseThemePreference,
+  resolveReadingTheme,
+  themePreferenceLabel,
+  type ThemePreference,
+} from "../lib/theme";
 import { shouldHandleNavKey, splitHref } from "../lib/toc";
 import * as api from "../lib/api";
 import { EditorPane } from "./EditorPane";
@@ -17,6 +25,45 @@ const XHTML_MEDIA_TYPES: ReadonlySet<string> = new Set([
  * The indicator only appears when a load is still pending after this long.
  */
 export const LOADING_INDICATOR_DELAY_MS = 150;
+
+const DARK_SCHEME_QUERY = "(prefers-color-scheme: dark)";
+
+/** Tracks the OS/app color scheme reactively (issue #78). */
+function useSystemDark(): boolean {
+  const [dark, setDark] = useState(
+    () => window.matchMedia(DARK_SCHEME_QUERY).matches,
+  );
+  useEffect(() => {
+    const media = window.matchMedia(DARK_SCHEME_QUERY);
+    const onChange = (event: MediaQueryListEvent) => setDark(event.matches);
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, []);
+  return dark;
+}
+
+/** Reading-theme preference persisted across sessions (issue #78). */
+function useThemePreference(): [ThemePreference, () => void] {
+  const [preference, setPreference] = useState<ThemePreference>(() => {
+    try {
+      return parseThemePreference(localStorage.getItem(THEME_STORAGE_KEY));
+    } catch {
+      return "auto";
+    }
+  });
+  const cycle = useCallback(() => {
+    setPreference((current) => {
+      const next = nextThemePreference(current);
+      try {
+        localStorage.setItem(THEME_STORAGE_KEY, next);
+      } catch {
+        // Persistence is best-effort; the in-session state still applies.
+      }
+      return next;
+    });
+  }, []);
+  return [preference, cycle];
+}
 
 /**
  * The reading surface: current chapter in a sandboxed iframe plus spine
@@ -72,6 +119,14 @@ export function ReaderPane() {
   const fragmentRef = useRef(fragment);
   fragmentRef.current = fragment;
 
+  // Reading theme (issue #78): auto follows the system scheme; the nav
+  // toggle cycles auto -> light -> dark. The resolved theme feeds the
+  // render-layer defaults only — author-styled books stay pinned light
+  // inside prepareChapterHtml, and stored EPUB content is never touched.
+  const systemDark = useSystemDark();
+  const [themePreference, cycleThemePreference] = useThemePreference();
+  const readingTheme = resolveReadingTheme(themePreference, systemDark);
+
   const srcdoc = useMemo(() => {
     if (book === null || chapter === null) return null;
     const resource = book.resources.find((r) => r.id === chapter.resource);
@@ -86,8 +141,9 @@ export function ReaderPane() {
       resource.path,
       (path) => api.resourceUrl(book.id, path),
       xhtmlPaths,
+      readingTheme,
     );
-  }, [book, chapter]);
+  }, [book, chapter, readingTheme]);
 
   /** Scroll the iframe to the current fragment, or back to the top. */
   const applyScroll = useCallback(() => {
@@ -201,6 +257,14 @@ export function ReaderPane() {
         >
           Next →
         </button>
+        <button
+          type="button"
+          className="theme-toggle"
+          onClick={cycleThemePreference}
+          title="Reading theme: Auto follows the system; Light/Dark force a scheme. Books with their own styling always render light."
+        >
+          {themePreferenceLabel(themePreference)}
+        </button>
         {book.epub_version === "V3" && spineIndex >= 0 && !editing && (
           <button
             type="button"
@@ -222,7 +286,15 @@ export function ReaderPane() {
       {!editing && srcdoc !== null && (
         <iframe
           ref={frameRef}
-          className="chapter-frame"
+          className={
+            // Match the frame's own backdrop to the EFFECTIVE chapter
+            // rendering (the marker prepareChapterHtml stamps on the
+            // injected defaults), so chapter switches never flash the
+            // opposite scheme behind the loading document.
+            srcdoc.includes('data-epubzilla-theme="dark"')
+              ? "chapter-frame chapter-frame-dark"
+              : "chapter-frame"
+          }
           title="Chapter content"
           // Same-origin, NO scripts: see the component doc comment.
           sandbox="allow-same-origin"

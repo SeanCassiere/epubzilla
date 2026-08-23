@@ -318,6 +318,12 @@ body {
   background: white;
 }
 
+/* Dark reading theme (issue #78): backdrop matching the dark chapter
+   document so switches don't flash white behind the loading frame. */
+.chapter-frame-dark {
+  background: #1e1e1e;
+}
+
 .empty {
   opacity: 0.65;
   padding: 2rem;
