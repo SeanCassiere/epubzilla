@@ -9,6 +9,7 @@ import {
   useCallback,
   useContext,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -71,6 +72,20 @@ interface ReaderState {
   goToResource: (path: string, fragment: string | null) => Promise<void>;
   nextChapter: () => Promise<void>;
   previousChapter: () => Promise<void>;
+  /** Edit mode (M3.1): the reader surface is replaced by the editor pane. */
+  editing: boolean;
+  startEditing: () => void;
+  /** Leave edit mode and re-read the current chapter (writes may have landed). */
+  stopEditing: () => Promise<void>;
+  /** write_chapter on the open book; adopts the returned Book (dirty set). */
+  writeChapter: (content: ChapterContent) => Promise<boolean>;
+  /**
+   * Navigation guard (M3.1): the editor registers an async veto consulted
+   * before any chapter-leaving navigation (goTo/goToResource/next/prev and
+   * opening or creating another book). Resolve false to cancel. One guard
+   * at a time; pass null to unregister.
+   */
+  setNavGuard: (guard: (() => Promise<boolean>) | null) => void;
 }
 
 const ReaderContext = createContext<ReaderState | null>(null);
@@ -90,6 +105,20 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
   const [fragment, setFragment] = useState<string | null>(null);
   const [status, setStatus] = useState<ReaderStatus>("idle");
   const [error, setError] = useState<unknown>(null);
+  const [editing, setEditing] = useState(false);
+
+  // Editor veto for chapter-leaving navigation (see setNavGuard docs).
+  const navGuardRef = useRef<(() => Promise<boolean>) | null>(null);
+  const setNavGuard = useCallback(
+    (guard: (() => Promise<boolean>) | null) => {
+      navGuardRef.current = guard;
+    },
+    [],
+  );
+  const passGuard = useCallback(async (): Promise<boolean> => {
+    const guard = navGuardRef.current;
+    return guard === null ? true : guard();
+  }, []);
 
   const loadChapter = useCallback(
     async (target: Book, index: number, targetFragment: string | null = null) => {
@@ -122,6 +151,8 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
    */
   const adoptBook = useCallback(
     async (acquire: () => Promise<Book>): Promise<boolean> => {
+      if (!(await passGuard())) return false;
+      setEditing(false);
       setStatus("opening");
       setError(null);
       try {
@@ -147,7 +178,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
         return false;
       }
     },
-    [book, loadChapter],
+    [book, loadChapter, passGuard],
   );
 
   const openBook = useCallback(
@@ -294,9 +325,10 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
   const goTo = useCallback(
     async (index: number) => {
       if (book === null || index < 0 || index >= book.spine.length) return;
+      if (index !== spineIndex && !(await passGuard())) return;
       await loadChapter(book, index);
     },
-    [book, loadChapter],
+    [book, spineIndex, loadChapter, passGuard],
   );
 
   const goToResource = useCallback(
@@ -311,22 +343,46 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
         setFragment(targetFragment);
         return;
       }
+      if (!(await passGuard())) return;
       await loadChapter(book, index, targetFragment);
     },
-    [book, spineIndex, chapter, loadChapter],
+    [book, spineIndex, chapter, loadChapter, passGuard],
   );
 
   const nextChapter = useCallback(async () => {
     if (book === null) return;
     const next = findLinear(book, spineIndex + 1, 1);
-    if (next !== -1) await loadChapter(book, next);
-  }, [book, spineIndex, loadChapter]);
+    if (next !== -1 && (await passGuard())) await loadChapter(book, next);
+  }, [book, spineIndex, loadChapter, passGuard]);
 
   const previousChapter = useCallback(async () => {
     if (book === null) return;
     const prev = findLinear(book, spineIndex - 1, -1);
-    if (prev !== -1) await loadChapter(book, prev);
+    if (prev !== -1 && (await passGuard())) await loadChapter(book, prev);
+  }, [book, spineIndex, loadChapter, passGuard]);
+
+  const startEditing = useCallback(() => {
+    if (book !== null && book.epub_version === "V3" && spineIndex >= 0) {
+      setEditing(true);
+    }
+  }, [book, spineIndex]);
+
+  const stopEditing = useCallback(async () => {
+    setEditing(false);
+    // Re-read the current chapter: applied writes changed its content.
+    if (book !== null && spineIndex >= 0) await loadChapter(book, spineIndex);
   }, [book, spineIndex, loadChapter]);
+
+  const writeChapter = useCallback(
+    async (content: ChapterContent): Promise<boolean> => {
+      if (book === null) return false;
+      const updated = await applyEdit(() =>
+        api.writeChapter(book.id, content.resource, content),
+      );
+      return updated !== null;
+    },
+    [book, applyEdit],
+  );
 
   const value = useMemo<ReaderState>(
     () => ({
@@ -347,6 +403,11 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       goToResource,
       nextChapter,
       previousChapter,
+      editing,
+      startEditing,
+      stopEditing,
+      writeChapter,
+      setNavGuard,
     }),
     [
       book,
@@ -366,6 +427,11 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       goToResource,
       nextChapter,
       previousChapter,
+      editing,
+      startEditing,
+      stopEditing,
+      writeChapter,
+      setNavGuard,
     ],
   );
 

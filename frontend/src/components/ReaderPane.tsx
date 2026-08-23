@@ -3,6 +3,7 @@ import { useReader, findLinear } from "../state/reader";
 import { prepareChapterHtml } from "../lib/chapter";
 import { shouldHandleNavKey, splitHref } from "../lib/toc";
 import * as api from "../lib/api";
+import { EditorPane } from "./EditorPane";
 
 /** Manifest media types rendered as chapters (inter-chapter link targets). */
 const XHTML_MEDIA_TYPES: ReadonlySet<string> = new Set([
@@ -34,6 +35,8 @@ export function ReaderPane() {
     goToResource,
     nextChapter,
     previousChapter,
+    editing,
+    startEditing,
   } = useReader();
 
   const frameRef = useRef<HTMLIFrameElement | null>(null);
@@ -172,13 +175,25 @@ export function ReaderPane() {
         >
           Next →
         </button>
+        {book.epub_version === "V3" && spineIndex >= 0 && !editing && (
+          <button
+            type="button"
+            className="edit-toggle"
+            onClick={startEditing}
+            disabled={status === "loading-chapter"}
+            title="Edit this chapter"
+          >
+            Edit
+          </button>
+        )}
       </nav>
-      {status === "loading-chapter" && (
+      {editing && <EditorPane />}
+      {!editing && status === "loading-chapter" && (
         <p className="status" role="status">
           Loading chapter…
         </p>
       )}
-      {srcdoc !== null && (
+      {!editing && srcdoc !== null && (
         <iframe
           ref={frameRef}
           className="chapter-frame"
