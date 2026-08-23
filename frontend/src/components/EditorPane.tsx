@@ -63,6 +63,7 @@ export function EditorPane() {
   const [baseline, setBaseline] = useState<string | null>(null);
   const [buffer, setBuffer] = useState<string | null>(null);
   const [format, setFormat] = useState<ContentFormat>("Markdown");
+  const [fallbackReason, setFallbackReason] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<unknown>(null);
   const [applying, setApplying] = useState(false);
   const [pendingLeave, setPendingLeave] = useState<PendingLeave>(null);
@@ -89,6 +90,7 @@ export function EditorPane() {
       .then((content) => {
         if (stale) return;
         setFormat(content.format);
+        setFallbackReason(content.fallback_reason ?? null);
         setBaseline(content.content);
         setBuffer(content.content);
       })
@@ -223,7 +225,8 @@ export function EditorPane() {
         )}
         {format === "Xhtml" && (
           <span className="editor-notice">
-            This chapter uses markup outside the Markdown subset, so it is
+            This chapter uses markup outside the Markdown subset
+            {fallbackReason !== null && <> ({fallbackReason})</>}, so it is
             edited as XHTML source to avoid losing anything.
           </span>
         )}

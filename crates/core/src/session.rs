@@ -329,18 +329,21 @@ impl Session {
         let content = String::from_utf8(bytes).map_err(|e| CoreError::MalformedPackage {
             message: format!("chapter {path} is not valid UTF-8: {e}"),
         })?;
+        let mut fallback_reason = None;
         if prefer == ContentFormat::Markdown {
-            if let Some(span) = body_span(&content) {
+            if let Some(span) = editable_span(&content) {
                 match roundtrip::xhtml_to_markdown(&content[span]) {
                     Ok(markdown) => {
                         return Ok(ChapterContent {
                             resource: resource_id.to_owned(),
                             format: ContentFormat::Markdown,
                             content: markdown,
+                            fallback_reason: None,
                         })
                     }
-                    // Out-of-subset content → source mode (format: Xhtml).
-                    Err(CoreError::ConversionLossy { .. }) => {}
+                    // Out-of-subset content → source mode (format: Xhtml),
+                    // surfacing which construct forced it.
+                    Err(CoreError::ConversionLossy { detail }) => fallback_reason = Some(detail),
                     Err(other) => return Err(other),
                 }
             }
@@ -349,6 +352,7 @@ impl Session {
             resource: resource_id.to_owned(),
             format: ContentFormat::Xhtml,
             content,
+            fallback_reason,
         })
     }
 
@@ -392,7 +396,7 @@ impl Session {
                     .and_then(|bytes| String::from_utf8(bytes).ok());
                 let framed = existing
                     .as_deref()
-                    .and_then(|doc| body_span(doc).map(|span| splice_body(doc, span, &body)));
+                    .and_then(|doc| editable_span(doc).map(|span| splice_body(doc, span, &body)));
                 match framed {
                     Some(doc) => doc,
                     None => {
@@ -931,6 +935,50 @@ fn body_span(doc: &str) -> Option<std::ops::Range<usize>> {
     }
 }
 
+/// Byte range of `doc`'s *editable* content: the `<body>` inner content,
+/// narrowed to the inside of a single top-level `<section>` wrapper when the
+/// body consists of exactly one (content-roundtrip.md: such a wrapper —
+/// regardless of its attributes, e.g. pandoc's `<section id class>` — is
+/// document frame, preserved verbatim like `<head>`).
+fn editable_span(doc: &str) -> Option<std::ops::Range<usize>> {
+    let body = body_span(doc)?;
+    match section_wrapper_span(&doc[body.clone()]) {
+        Some(inner) => Some(body.start + inner.start..body.start + inner.end),
+        None => Some(body),
+    }
+}
+
+/// If `body_content` is exactly one top-level `<section>` element plus
+/// optional surrounding whitespace, the byte range of that section's inner
+/// content (relative to `body_content`). `None` otherwise.
+fn section_wrapper_span(body_content: &str) -> Option<std::ops::Range<usize>> {
+    let mut reader = Reader::from_str(body_content);
+    let mut inner: Option<std::ops::Range<usize>> = None;
+    loop {
+        match reader.read_event() {
+            Ok(XmlEvent::Start(e)) => {
+                if inner.is_some() || e.local_name().as_ref() != "section" {
+                    return None; // second top-level element, or not a section
+                }
+                let name = e.name().as_ref().to_owned();
+                let span = reader.read_to_end(QName(&name)).ok()?;
+                inner = Some(span.start as usize..span.end as usize);
+            }
+            Ok(XmlEvent::Text(t)) => {
+                let text = t
+                    .xml_content(quick_xml::XmlVersion::Implicit1_0)
+                    .into_owned();
+                if !text.trim().is_empty() {
+                    return None; // bare text next to the wrapper: not a wrapper
+                }
+            }
+            Ok(XmlEvent::Eof) => return inner,
+            Ok(_) => return None, // any other top-level node: not a lone wrapper
+            Err(_) => return None,
+        }
+    }
+}
+
 /// Replace the `<body>` inner content of `doc` (span from [`body_span`])
 /// with a fresh XHTML fragment, preserving the frame verbatim. Declares the
 /// `epub:` namespace on `<html>` if the new body needs it and it is missing.
@@ -1370,6 +1418,124 @@ mod tests {
         assert_eq!(chapter.content, "Chapter two\n");
     }
 
+    /// The real-world pandoc EPUB 3 shape: attributed <body> and a single
+    /// attributed <section> wrapper are frame (content-roundtrip.md), so the
+    /// chapter reads as Markdown and edits splice back inside the wrapper.
+    const PANDOC_CH: &str = r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>One</title></head><body epub:type="bodymatter"><section id="one" class="level1">
+<h1>One</h1>
+<p>Hello <em>world</em>.</p>
+<p>Second paragraph.</p>
+</section></body></html>"#;
+
+    fn pandoc_entries() -> Vec<(&'static str, &'static str)> {
+        let mut entries = epub3_entries();
+        for entry in &mut entries {
+            if entry.0 == "OEBPS/ch1.xhtml" {
+                entry.1 = PANDOC_CH;
+            }
+        }
+        entries
+    }
+
+    #[test]
+    fn pandoc_section_wrapper_reads_as_markdown() {
+        let path = write_epub("pandoc.epub", &pandoc_entries());
+        let mut session = Session::new();
+        let book = session.open_book(&path).unwrap();
+
+        let chapter = session
+            .read_chapter(&book.id, "ch1", ContentFormat::Markdown)
+            .unwrap();
+        assert_eq!(chapter.format, ContentFormat::Markdown);
+        assert_eq!(chapter.fallback_reason, None);
+        assert_eq!(
+            chapter.content,
+            "# One\n\nHello *world*.\n\nSecond paragraph.\n"
+        );
+    }
+
+    #[test]
+    fn pandoc_section_wrapper_round_trips_verbatim() {
+        let path = write_epub("pandoc-rt.epub", &pandoc_entries());
+        let mut session = Session::new();
+        let book = session.open_book(&path).unwrap();
+
+        let first = session
+            .read_chapter(&book.id, "ch1", ContentFormat::Markdown)
+            .unwrap();
+        assert_eq!(first.format, ContentFormat::Markdown);
+
+        // Write the Markdown back and check the frame survived verbatim:
+        // <body> attributes and the <section> wrapper with all attributes.
+        session
+            .write_chapter(&book.id, "ch1", first.clone())
+            .unwrap();
+        let stored = session
+            .read_chapter(&book.id, "ch1", ContentFormat::Xhtml)
+            .unwrap();
+        assert!(stored.content.contains(r#"<body epub:type="bodymatter">"#));
+        assert!(stored
+            .content
+            .contains(r#"<section id="one" class="level1">"#));
+        assert!(stored.content.contains("<head><title>One</title></head>"));
+
+        // read(write(read(x))) is stable.
+        let second = session
+            .read_chapter(&book.id, "ch1", ContentFormat::Markdown)
+            .unwrap();
+        assert_eq!(second.format, ContentFormat::Markdown);
+        assert_eq!(second.content, first.content);
+    }
+
+    #[test]
+    fn multiple_attributed_sections_fall_back_with_reason() {
+        let doc = r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><section id="a"><p>x</p></section><section id="b"><p>y</p></section></body></html>"#;
+        let mut entries = epub3_entries();
+        for entry in &mut entries {
+            if entry.0 == "OEBPS/ch1.xhtml" {
+                entry.1 = doc;
+            }
+        }
+        let path = write_epub("multi-section.epub", &entries);
+        let mut session = Session::new();
+        let book = session.open_book(&path).unwrap();
+
+        let chapter = session
+            .read_chapter(&book.id, "ch1", ContentFormat::Markdown)
+            .unwrap();
+        assert_eq!(chapter.format, ContentFormat::Xhtml);
+        assert_eq!(chapter.content, doc);
+        let reason = chapter
+            .fallback_reason
+            .expect("fallback names the construct");
+        assert!(reason.contains("section"), "reason was: {reason}");
+    }
+
+    #[test]
+    fn nested_attributed_section_falls_back_with_reason() {
+        // The outer wrapper is frame; the inner attributed <section> is
+        // content and stays out of subset.
+        let doc = r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><section id="outer"><section id="inner"><p>x</p></section></section></body></html>"#;
+        let mut entries = epub3_entries();
+        for entry in &mut entries {
+            if entry.0 == "OEBPS/ch1.xhtml" {
+                entry.1 = doc;
+            }
+        }
+        let path = write_epub("nested-section.epub", &entries);
+        let mut session = Session::new();
+        let book = session.open_book(&path).unwrap();
+
+        let chapter = session
+            .read_chapter(&book.id, "ch1", ContentFormat::Markdown)
+            .unwrap();
+        assert_eq!(chapter.format, ContentFormat::Xhtml);
+        let reason = chapter
+            .fallback_reason
+            .expect("fallback names the construct");
+        assert!(reason.contains("section"), "reason was: {reason}");
+    }
+
     #[test]
     fn read_chapter_rejects_non_xhtml() {
         let path = write_epub("nonxhtml.epub", &epub3_entries());
@@ -1720,6 +1886,7 @@ mod tests {
             resource: resource.to_owned(),
             format: ContentFormat::Markdown,
             content: content.to_owned(),
+            fallback_reason: None,
         }
     }
 
@@ -1983,6 +2150,7 @@ mod tests {
                     resource: resource_id.clone(),
                     format: ContentFormat::Xhtml,
                     content: doc.to_owned(),
+                    fallback_reason: None,
                 },
             )
             .unwrap();

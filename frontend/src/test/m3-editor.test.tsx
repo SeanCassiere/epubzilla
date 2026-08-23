@@ -188,6 +188,21 @@ describe("M3.1 edit mode", () => {
     });
   });
 
+  it("shows the fallback reason in the source-mode notice when present", async () => {
+    const fixture = epub3Fixture();
+    fixture.chapters.ch1 = {
+      ...fixture.chapters.ch1,
+      fallback_reason: "unsupported element <script>",
+    };
+    const calls = mockBackend(fixture, {});
+    await openFixtureAndEdit(calls);
+
+    await screen.findByLabelText("chapter buffer");
+    expect(
+      screen.getByText(/unsupported element <script>/),
+    ).toBeTruthy();
+  });
+
   it("guards chapter navigation while the buffer has unapplied changes", async () => {
     const calls = mockBackend(epub3Fixture(), { ch1: MD });
     await openFixtureAndEdit(calls);

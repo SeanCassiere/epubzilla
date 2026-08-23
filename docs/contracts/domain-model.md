@@ -63,6 +63,9 @@ struct ChapterContent {
     resource: ResourceId,
     format: ContentFormat,     // Markdown | Xhtml (see content-roundtrip.md)
     content: String,
+    // When Markdown was preferred but the chapter came back as Xhtml, the
+    // out-of-subset construct that forced source mode. None otherwise.
+    fallback_reason: Option<String>,
 }
 
 enum ContentFormat { Markdown, Xhtml }
