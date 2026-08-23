@@ -18,7 +18,7 @@ book data: it holds `BookId`s and re-fetches.
 |---|---|---|---|
 | `open_book` | `path: String` | `Book` | Parses container/OPF/nav eagerly; chapter bodies lazy. |
 | `create_book` | `metadata: Metadata` | `Book` | New in-memory EPUB 3 book with a generated title page; `source: None`. |
-| `save_book` | `book_id, path: Option<String>` | `Book` | Atomic write (temp + rename). `path` required when `source` is `None` (save-as). Untouched zip entries are copied, not re-encoded. Refreshes `dcterms:modified`, clears `dirty`. |
+| `save_book` | `book_id, path: Option<String>` | `Book` | Atomic write (temp + rename). `path` required when `source` is `None` (save-as). Untouched zip entries are copied, not re-encoded. Refreshes `dcterms:modified`, clears `dirty`. Unreferenced non-content resources are dropped on save (orphan sweep): references are collected from every content document (`src`/`href`/`xlink:href` attributes) and transitively through CSS `url(...)` chains; content documents, the nav document, the NCX, and the cover image are never swept. The sweep is silent — swept paths are observable only as the returned `Book`'s smaller `resources` list. |
 | `close_book` | `book_id` | `()` | Drops session state. Unsaved changes are the frontend's problem to confirm. |
 
 ### Reading
