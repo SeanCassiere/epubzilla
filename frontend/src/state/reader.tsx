@@ -59,6 +59,13 @@ interface ReaderState {
    * slot in `direction`; adopts the returned Book, current chapter kept.
    */
   moveSpineItem: (spineItemId: string, direction: 1 | -1) => Promise<boolean>;
+  /**
+   * save_book on the open book (M2.4). `path` is required when the book
+   * has no `source` (save-as); omit it to save in place. Adopts the
+   * returned Book (dirty cleared, source set) — position and current
+   * chapter are kept, only the model changed.
+   */
+  saveBook: (path?: string) => Promise<boolean>;
   goTo: (spineIndex: number) => Promise<void>;
   /** Navigate by zip-internal resource path (TOC entries, chapter links). */
   goToResource: (path: string, fragment: string | null) => Promise<void>;
@@ -266,6 +273,24 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
     [book, applyEdit],
   );
 
+  const saveBook = useCallback(
+    async (path?: string): Promise<boolean> => {
+      if (book === null) return false;
+      setError(null);
+      try {
+        const saved = await api.saveBook(book.id, path);
+        // Same book, same spine position — only `dirty`, `source`, and
+        // `dcterms:modified` changed.
+        setBook(saved);
+        return true;
+      } catch (err) {
+        setError(err);
+        return false;
+      }
+    },
+    [book],
+  );
+
   const goTo = useCallback(
     async (index: number) => {
       if (book === null || index < 0 || index >= book.spine.length) return;
@@ -317,6 +342,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       addChapter,
       removeChapter,
       moveSpineItem,
+      saveBook,
       goTo,
       goToResource,
       nextChapter,
@@ -335,6 +361,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       addChapter,
       removeChapter,
       moveSpineItem,
+      saveBook,
       goTo,
       goToResource,
       nextChapter,

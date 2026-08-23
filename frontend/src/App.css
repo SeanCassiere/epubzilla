@@ -50,6 +50,21 @@ body {
   text-overflow: ellipsis;
 }
 
+/* Unsaved-changes marker beside the title (M2.4). */
+.dirty-indicator {
+  color: #d97706;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+/* Unsaved-changes guard modal buttons (M2.4). */
+.modal-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}
+
 .book-authors {
   opacity: 0.7;
   white-space: nowrap;
