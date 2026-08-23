@@ -272,8 +272,8 @@ fn build_aux_nav_epub(dir: &std::path::Path) -> PathBuf {
   <nav epub:type="landmarks">
     <h2>Guide</h2>
     <ol>
-      <li><a epub:type="toc" href="nav.xhtml">Table of Contents</a></li>
       <li><a epub:type="bodymatter" href="ch1.xhtml">Start of Content</a></li>
+      <li><a epub:type="backmatter" href="ch2.xhtml">Back Matter</a></li>
     </ol>
   </nav>
   <nav epub:type="page-list" hidden="hidden">
