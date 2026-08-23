@@ -20,7 +20,8 @@ import {
   toggleReadingMode,
   type ReadingMode,
 } from "../lib/readingMode";
-import { shouldHandleNavKey, splitHref } from "../lib/toc";
+import { shouldHandleNavKey } from "../lib/toc";
+import { handleChapterClick } from "../lib/chapterClick";
 import { handleShortcutKeydown, onShortcut } from "../lib/shortcuts";
 import * as api from "../lib/api";
 import { EditorPane } from "./EditorPane";
@@ -318,30 +319,23 @@ export function ReaderPane() {
     doc.addEventListener(
       "click",
       (event) => {
-        const target = event.target;
-        if (!(target instanceof Element)) return;
-        const anchor = target.closest("a[data-epub-link]");
-        const link = anchor?.getAttribute("data-epub-link");
-        if (link !== null && link !== undefined) {
-          // Navigate the app, never the iframe.
-          event.preventDefault();
-          const { path, fragment: frag } = splitHref(link);
-          void actionsRef.current.goToResource(path, frag);
-          return;
-        }
-        // Paginated click page-turn (issue #75): outer thirds of the
-        // viewport turn the page; the middle third stays inert so text
-        // selection and in-page links behave normally.
-        if (modeRef.current !== "paginated") return;
-        if (target.closest("a") !== null) return;
+        // event.target belongs to the IFRAME's realm — all target checks
+        // live in handleChapterClick, which is realm-agnostic (issue #84:
+        // a parent-realm `instanceof Element` guard here silently killed
+        // link interception and let the sandboxed frame navigate itself).
         const selection = doc.defaultView?.getSelection();
-        if (selection !== null && selection !== undefined && !selection.isCollapsed) {
-          return;
-        }
-        const width = doc.defaultView?.innerWidth ?? 0;
-        if (width <= 0) return;
-        if (event.clientX >= (width * 2) / 3) turnPage(1);
-        else if (event.clientX <= width / 3) turnPage(-1);
+        handleChapterClick(event, {
+          mode: modeRef.current,
+          viewportWidth: doc.defaultView?.innerWidth ?? 0,
+          selectionCollapsed:
+            selection === null ||
+            selection === undefined ||
+            selection.isCollapsed,
+          goToResource: (path, frag) => {
+            void actionsRef.current.goToResource(path, frag);
+          },
+          turnPage,
+        });
       },
       true,
     );
