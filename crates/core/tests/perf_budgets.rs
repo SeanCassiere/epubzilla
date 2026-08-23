@@ -11,7 +11,7 @@
 //! release mode:
 //!
 //! ```sh
-//! cargo test -p epubzilla-core --release --test perf_budgets -- --ignored --nocapture
+//! cargo test -p epubzilla-core --release --test perf_budgets -- --ignored --nocapture --test-threads=1
 //! ```
 //!
 //! Budgets are contracted for the reference machine (typical laptop, local

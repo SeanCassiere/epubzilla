@@ -73,7 +73,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Run perf budgets
-        run: cargo test -p epubzilla-core --release --test perf_budgets -- --ignored --nocapture
+        run: cargo test -p epubzilla-core --release --test perf_budgets -- --ignored --nocapture --test-threads=1
 
   epubcheck:
     # Validates every EPUB the writer produces (fixtures land with M0.6).
