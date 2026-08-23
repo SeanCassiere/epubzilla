@@ -22,7 +22,7 @@ use crate::model::{
     Book, BookId, ChapterContent, ContentFormat, EpubVersion, Metadata, NavPoint, Resource,
     ResourceId, SpineItem, SpineItemId,
 };
-use crate::{nav, opf, roundtrip, writer};
+use crate::{nav, opf, refs, roundtrip, writer};
 
 const XHTML_MEDIA_TYPE: &str = "application/xhtml+xml";
 const MIMETYPE_PATH: &str = "mimetype";
@@ -242,8 +242,14 @@ impl Session {
     /// `dcterms:modified`; overlay entries are written from memory; every
     /// other entry is raw-copied from the source container without
     /// re-encoding. `path` is required when the book has no source (save-as).
+    ///
+    /// Before serialization an orphan sweep drops unreferenced non-content
+    /// resources (manifest entry, overlay bytes, and zip entry) so repeated
+    /// add/remove cycles cannot grow the file; content documents, nav, NCX,
+    /// and the cover are never swept.
     pub fn save_book(&mut self, book_id: &str, path: Option<String>) -> CoreResult<Book> {
         let open = self.open_mut(book_id)?;
+        sweep_orphans(open);
         let target: PathBuf = match path.or_else(|| open.book.source.clone()) {
             Some(p) => PathBuf::from(p),
             None => {
@@ -802,6 +808,94 @@ impl Session {
     }
 }
 
+/// Garbage-collect unreferenced resources before a save (the orphan sweep).
+///
+/// Never swept: content documents (XHTML/HTML media types, which includes
+/// everything in the spine), the nav document, the NCX, and the cover image.
+/// Everything else survives only if some content document references it —
+/// directly (`img src`, `link href`, SVG `xlink:href`, `source`/`audio`/
+/// `video`/`object`/`embed` attributes) or transitively through CSS
+/// `url(...)` chains (chapter → stylesheet → font/image). Orphans lose their
+/// manifest entry, their overlay bytes, and their zip entry (via the
+/// `removed` raw-copy exclusion). EPUB 2 books are read-only and never swept.
+fn sweep_orphans(open: &mut OpenBook) {
+    if open.book.epub_version == EpubVersion::V2 {
+        return;
+    }
+    let is_content = |media_type: &str| media_type == XHTML_MEDIA_TYPE || media_type == "text/html";
+
+    // Resources with intrinsic protection: content docs (spine members are
+    // always XHTML per the domain model), nav, NCX, cover.
+    let mut protected: HashSet<String> = open
+        .book
+        .resources
+        .iter()
+        .filter(|r| is_content(&r.media_type))
+        .map(|r| r.id.clone())
+        .collect();
+    protected.extend(open.book.spine.iter().map(|s| s.resource.clone()));
+    protected.extend(open.nav_resource.iter().cloned());
+    protected.extend(open.ncx_resource.iter().cloned());
+    protected.extend(open.book.metadata.cover_resource.iter().cloned());
+
+    // Path → media type for reference-target lookups.
+    let media_type_of: HashMap<String, String> = open
+        .book
+        .resources
+        .iter()
+        .map(|r| (r.path.clone(), r.media_type.clone()))
+        .collect();
+
+    // Scan every content document, then follow CSS chains transitively
+    // (a chapter's stylesheet can pull in fonts, images, or further CSS).
+    enum Kind {
+        Xhtml,
+        Css,
+    }
+    let mut queue: Vec<(String, Kind)> = open
+        .book
+        .resources
+        .iter()
+        .filter(|r| is_content(&r.media_type))
+        .map(|r| (r.path.clone(), Kind::Xhtml))
+        .collect();
+    let mut scanned: HashSet<String> = HashSet::new();
+    let mut referenced: HashSet<String> = HashSet::new();
+    while let Some((path, kind)) = queue.pop() {
+        if !scanned.insert(path.clone()) {
+            continue;
+        }
+        let Ok(bytes) = open.read_entry(&path) else {
+            continue;
+        };
+        let found = match kind {
+            Kind::Xhtml => refs::xhtml_refs(&bytes, &path),
+            Kind::Css => refs::css_refs(&String::from_utf8_lossy(&bytes), &path),
+        };
+        for target in found {
+            if media_type_of.get(&target).map(String::as_str) == Some("text/css") {
+                queue.push((target.clone(), Kind::Css));
+            }
+            referenced.insert(target);
+        }
+    }
+
+    let orphans: Vec<(String, String)> = open
+        .book
+        .resources
+        .iter()
+        .filter(|r| !protected.contains(&r.id) && !referenced.contains(&r.path))
+        .map(|r| (r.id.clone(), r.path.clone()))
+        .collect();
+    for (id, path) in orphans {
+        open.book.resources.retain(|r| r.id != id);
+        open.overlay.remove(&path);
+        if open.container.is_some() {
+            open.removed.insert(path);
+        }
+    }
+}
+
 /// Assemble the EPUB zip at `temp_path`: stored mimetype first, regenerated
 /// OPF, overlay entries from memory, everything else raw-copied.
 fn write_epub_zip(open: &mut OpenBook, temp_path: &Path, opf_bytes: &[u8]) -> CoreResult<()> {
@@ -1284,7 +1378,7 @@ mod tests {
   <li><a href="ch2.xhtml">Chapter 2</a></li>
 </ol></nav></body></html>"#;
 
-    const CH1: &str = r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><p>Hëllo — chapter one ✓</p></body></html>"#;
+    const CH1: &str = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" type="text/css" href="style.css"/></head><body><p>Hëllo — chapter one ✓</p></body></html>"#;
     const CH2: &str =
         r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><p>Chapter two</p></body></html>"#;
     const CSS: &str = "body { color: black; }";
@@ -1991,6 +2085,14 @@ mod tests {
         let book = session
             .add_resource(&book.id, "pïxel.png", "image/png", PNG_1X1.to_vec())
             .unwrap();
+        // Reference it from a chapter so the orphan sweep keeps it.
+        session
+            .write_chapter(
+                &book.id,
+                "titlepage",
+                md_chapter("titlepage", "# Title\n\n![a pixel](images/pïxel.png)\n"),
+            )
+            .unwrap();
         let path = temp_path("addres-roundtrip.epub");
         session
             .save_book(&book.id, Some(path.to_string_lossy().into_owned()))
@@ -2006,6 +2108,189 @@ mod tests {
         assert_eq!(added.size, PNG_1X1.len() as u64);
         let bytes = session.read_resource(&reopened.id, &added.id).unwrap();
         assert_eq!(bytes, PNG_1X1);
+    }
+
+    fn zip_names(path: &std::path::Path) -> Vec<String> {
+        let archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+        archive.file_names().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn orphan_sweep_drops_unreferenced_resource_on_save() {
+        let mut session = Session::new();
+        let book = session.create_book(sample_metadata());
+        let book = session
+            .add_resource(&book.id, "orphan.png", "image/png", PNG_1X1.to_vec())
+            .unwrap();
+        assert!(book.resources.iter().any(|r| r.id == "orphan"));
+
+        let path = temp_path("sweep-unreferenced.epub");
+        let saved = session
+            .save_book(&book.id, Some(path.to_string_lossy().into_owned()))
+            .unwrap();
+        // Gone from the model, the manifest of the reopened book, and the zip.
+        assert!(!saved.resources.iter().any(|r| r.id == "orphan"));
+        let reopened = session.open_book(&path).unwrap();
+        assert!(!reopened.resources.iter().any(|r| r.id == "orphan"));
+        assert!(!zip_names(&path)
+            .iter()
+            .any(|n| n == "OEBPS/images/orphan.png"));
+    }
+
+    #[test]
+    fn orphan_sweep_drops_resource_once_dereferenced() {
+        let mut session = Session::new();
+        let book = session.create_book(sample_metadata());
+        session
+            .add_resource(&book.id, "pic.png", "image/png", PNG_1X1.to_vec())
+            .unwrap();
+        session
+            .write_chapter(
+                &book.id,
+                "titlepage",
+                md_chapter("titlepage", "# T\n\n![p](images/pic.png)\n"),
+            )
+            .unwrap();
+        let path = temp_path("sweep-dereferenced.epub");
+        let saved = session
+            .save_book(&book.id, Some(path.to_string_lossy().into_owned()))
+            .unwrap();
+        assert!(saved.resources.iter().any(|r| r.id == "pic"));
+        assert!(zip_names(&path).iter().any(|n| n == "OEBPS/images/pic.png"));
+
+        // Drop the reference, resave in place: the image is swept — including
+        // its zip entry, which the second (incremental) save must exclude
+        // from the raw copy.
+        session
+            .write_chapter(
+                &book.id,
+                "titlepage",
+                md_chapter("titlepage", "# T\n\nNo more image.\n"),
+            )
+            .unwrap();
+        let saved = session.save_book(&book.id, None).unwrap();
+        assert!(!saved.resources.iter().any(|r| r.id == "pic"));
+        assert!(!zip_names(&path).iter().any(|n| n == "OEBPS/images/pic.png"));
+        let reopened = session.open_book(&path).unwrap();
+        assert!(!reopened.resources.iter().any(|r| r.id == "pic"));
+    }
+
+    #[test]
+    fn orphan_sweep_follows_css_chains_transitively() {
+        let opf = r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">urn:uuid:css-chain</dc:identifier>
+    <dc:title>CSS Chain</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="style" href="style.css" media-type="text/css"/>
+    <item id="kept-font" href="fonts/kept.otf" media-type="font/otf"/>
+    <item id="bg" href="images/bg.png" media-type="image/png"/>
+    <item id="orphan-font" href="fonts/orphan.otf" media-type="font/otf"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#;
+        let nav = r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<body><nav epub:type="toc"><ol><li><a href="ch1.xhtml">One</a></li></ol></nav></body></html>"#;
+        let css = r#"@font-face { font-family: K; src: url("fonts/kept.otf"); }
+body { background: url(images/bg.png); }"#;
+        let entries = vec![
+            ("mimetype", "application/epub+zip"),
+            ("META-INF/container.xml", CONTAINER_XML),
+            ("OEBPS/content.opf", opf),
+            ("OEBPS/nav.xhtml", nav),
+            ("OEBPS/ch1.xhtml", CH1), // links style.css
+            ("OEBPS/style.css", css),
+            ("OEBPS/fonts/kept.otf", "kept-font-bytes"),
+            ("OEBPS/images/bg.png", "bg-image-bytes"),
+            ("OEBPS/fonts/orphan.otf", "orphan-font-bytes"),
+        ];
+        let source = write_epub("sweep-css-src.epub", &entries);
+        let mut session = Session::new();
+        let book = session.open_book(&source).unwrap();
+        let target = temp_path("sweep-css-dst.epub");
+        let saved = session
+            .save_book(&book.id, Some(target.to_string_lossy().into_owned()))
+            .unwrap();
+
+        // chapter → css → font/image chain survives; the orphan font is gone.
+        for kept in ["style", "kept-font", "bg"] {
+            assert!(
+                saved.resources.iter().any(|r| r.id == kept),
+                "expected {kept} to survive the sweep"
+            );
+        }
+        assert!(!saved.resources.iter().any(|r| r.id == "orphan-font"));
+        let names = zip_names(&target);
+        assert!(names.iter().any(|n| n == "OEBPS/fonts/kept.otf"));
+        assert!(names.iter().any(|n| n == "OEBPS/images/bg.png"));
+        assert!(!names.iter().any(|n| n == "OEBPS/fonts/orphan.otf"));
+        session.open_book(&target).unwrap();
+    }
+
+    #[test]
+    fn orphan_sweep_never_removes_cover_nav_or_ncx() {
+        let opf = r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">urn:uuid:cover-nav-ncx</dc:identifier>
+    <dc:title>Protected</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="style" href="style.css" media-type="text/css"/>
+    <item id="cover-img" href="cover.png" media-type="image/png" properties="cover-image"/>
+  </manifest>
+  <spine toc="ncx">
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#;
+        let nav = r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<body><nav epub:type="toc"><ol><li><a href="ch1.xhtml">One</a></li></ol></nav></body></html>"#;
+        let entries = vec![
+            ("mimetype", "application/epub+zip"),
+            ("META-INF/container.xml", CONTAINER_XML),
+            ("OEBPS/content.opf", opf),
+            ("OEBPS/nav.xhtml", nav),
+            ("OEBPS/toc.ncx", NCX),
+            ("OEBPS/ch1.xhtml", CH1),
+            ("OEBPS/style.css", CSS),
+            ("OEBPS/cover.png", "cover-image-bytes"),
+        ];
+        let source = write_epub("sweep-protected-src.epub", &entries);
+        let mut session = Session::new();
+        let book = session.open_book(&source).unwrap();
+        assert_eq!(book.metadata.cover_resource.as_deref(), Some("cover-img"));
+
+        let target = temp_path("sweep-protected-dst.epub");
+        let saved = session
+            .save_book(&book.id, Some(target.to_string_lossy().into_owned()))
+            .unwrap();
+        // Cover, nav, and NCX are unreferenced from content but never swept.
+        for kept in ["cover-img", "nav", "ncx"] {
+            assert!(
+                saved.resources.iter().any(|r| r.id == kept),
+                "expected {kept} to survive the sweep"
+            );
+        }
+        let names = zip_names(&target);
+        for name in ["OEBPS/cover.png", "OEBPS/nav.xhtml", "OEBPS/toc.ncx"] {
+            assert!(names.iter().any(|n| n == name), "missing {name}");
+        }
+        let reopened = session.open_book(&target).unwrap();
+        assert_eq!(
+            reopened.metadata.cover_resource.as_deref(),
+            Some("cover-img")
+        );
     }
 
     #[test]
