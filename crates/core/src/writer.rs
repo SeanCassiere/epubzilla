@@ -11,7 +11,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use crate::model::{Book, Metadata, NavPoint};
+use crate::model::{Book, Metadata, NavPoint, Resource};
+use crate::nav::{AuxNav, AuxNavEntry, AuxTarget};
 
 /// Current time as ISO 8601 UTC with second precision, e.g.
 /// `2026-08-23T12:34:56Z` — the exact shape `dcterms:modified` requires.
@@ -234,10 +235,27 @@ pub(crate) fn write_chapter_xhtml(title: &str, language: &str, body: &str) -> St
 /// The EPUB 3 nav document, regenerated from the model's `NavPoint` tree.
 /// Hrefs in `nav` are zip-internal paths (plus optional fragment) and are
 /// rewritten relative to `nav_path`, the nav document's own zip path.
-pub(crate) fn write_nav_xhtml(metadata: &Metadata, nav: &[NavPoint], nav_path: &str) -> String {
+///
+/// `aux` are the source document's preserved non-toc navs (landmarks,
+/// page-list, …), re-emitted after the toc with hrefs recomputed from the
+/// current manifest (`resources`): entries bound to a resource id follow the
+/// resource's current path, entries whose resource no longer exists are
+/// dropped, and a nav whose entries all dropped is omitted (an empty `<ol>`
+/// would fail epubcheck).
+pub(crate) fn write_nav_xhtml(
+    metadata: &Metadata,
+    nav: &[NavPoint],
+    aux: &[AuxNav],
+    resources: &[Resource],
+    nav_path: &str,
+) -> String {
     let nav_dir = parent_dir(nav_path);
     let mut items = String::new();
     write_nav_list(&mut items, nav, &nav_dir, 4);
+    let mut aux_navs = String::new();
+    for preserved in aux {
+        write_aux_nav(&mut aux_navs, preserved, resources, &nav_dir);
+    }
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
@@ -251,12 +269,94 @@ pub(crate) fn write_nav_xhtml(metadata: &Metadata, nav: &[NavPoint], nav_path: &
     <ol>
 {items}    </ol>
   </nav>
-</body>
+{aux_navs}</body>
 </html>
 "#,
         lang = escape_xml(&metadata.language),
         title = escape_xml(&metadata.title),
     )
+}
+
+/// Render one preserved non-toc nav, or nothing when every entry dropped.
+fn write_aux_nav(out: &mut String, nav: &AuxNav, resources: &[Resource], nav_dir: &str) {
+    // Landmarks entries must be links carrying an epub:type (EPUB 3 spec /
+    // epubcheck); entries that lost their target or type are dropped.
+    let landmarks = nav.epub_type.split_whitespace().any(|v| v == "landmarks");
+    let mut items = String::new();
+    write_aux_list(&mut items, &nav.entries, landmarks, resources, nav_dir, 4);
+    if items.is_empty() {
+        return;
+    }
+    out.push_str(&format!(
+        "  <nav epub:type=\"{}\">\n",
+        escape_xml(&nav.epub_type)
+    ));
+    if let Some(heading) = &nav.heading {
+        out.push_str(&format!("    <h2>{}</h2>\n", escape_xml(heading)));
+    }
+    out.push_str("    <ol>\n");
+    out.push_str(&items);
+    out.push_str("    </ol>\n  </nav>\n");
+}
+
+/// Render one `<ol>` level of a preserved nav. Entries whose resource was
+/// removed are dropped (with their children); landmarks entries additionally
+/// require a target and an `epub:type`.
+fn write_aux_list(
+    out: &mut String,
+    entries: &[AuxNavEntry],
+    landmarks: bool,
+    resources: &[Resource],
+    nav_dir: &str,
+    indent: usize,
+) {
+    let pad = " ".repeat(indent + 2);
+    for entry in entries {
+        let href = match &entry.target {
+            Some(AuxTarget::Resource { id, fragment }) => {
+                let Some(resource) = resources.iter().find(|r| r.id == *id) else {
+                    continue; // target removed: drop the entry
+                };
+                let mut target = relative_href(nav_dir, &resource.path);
+                if let Some(fragment) = fragment {
+                    target.push('#');
+                    target.push_str(fragment);
+                }
+                Some(target)
+            }
+            Some(AuxTarget::Href(href)) => Some(href.clone()),
+            None => None,
+        };
+        if landmarks && (href.is_none() || entry.entry_type.is_none()) {
+            continue;
+        }
+        let label = escape_xml(&entry.label);
+        let entry_type = entry
+            .entry_type
+            .as_ref()
+            .map(|t| format!(" epub:type=\"{}\"", escape_xml(t)))
+            .unwrap_or_default();
+        let anchor = match href {
+            Some(href) => format!("<a{entry_type} href=\"{}\">{label}</a>", escape_xml(&href)),
+            None => format!("<span>{label}</span>"),
+        };
+        let mut children = String::new();
+        write_aux_list(
+            &mut children,
+            &entry.children,
+            landmarks,
+            resources,
+            nav_dir,
+            indent + 4,
+        );
+        if children.is_empty() {
+            out.push_str(&format!("{pad}<li>{anchor}</li>\n"));
+        } else {
+            out.push_str(&format!(
+                "{pad}<li>{anchor}\n{pad}  <ol>\n{children}{pad}  </ol>\n{pad}</li>\n"
+            ));
+        }
+    }
 }
 
 /// Render one `<ol>` level of the nav tree (list items only, no `<ol>` tags
@@ -473,5 +573,143 @@ mod tests {
             r#"id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav""#
         ));
         assert!(opf.contains(r#"properties="cover-image""#));
+    }
+
+    fn xhtml_resource(id: &str, path: &str) -> Resource {
+        Resource {
+            id: id.into(),
+            path: path.into(),
+            media_type: "application/xhtml+xml".into(),
+            size: 0,
+        }
+    }
+
+    fn entry(label: &str, entry_type: Option<&str>, target: Option<AuxTarget>) -> AuxNavEntry {
+        AuxNavEntry {
+            label: label.into(),
+            entry_type: entry_type.map(str::to_owned),
+            target,
+            children: Vec::new(),
+        }
+    }
+
+    fn resource_target(id: &str, fragment: Option<&str>) -> Option<AuxTarget> {
+        Some(AuxTarget::Resource {
+            id: id.into(),
+            fragment: fragment.map(str::to_owned),
+        })
+    }
+
+    #[test]
+    fn nav_preserves_landmarks_and_page_list() {
+        let resources = vec![
+            xhtml_resource("ch1", "OEBPS/text/ch1.xhtml"),
+            xhtml_resource("ch2", "OEBPS/text/ch2.xhtml"),
+        ];
+        let aux = vec![
+            AuxNav {
+                epub_type: "landmarks".into(),
+                heading: Some("Guide".into()),
+                entries: vec![
+                    entry("Start", Some("bodymatter"), resource_target("ch1", None)),
+                    entry(
+                        "External",
+                        Some("other"),
+                        Some(AuxTarget::Href("https://example.com/?a=1".into())),
+                    ),
+                ],
+            },
+            AuxNav {
+                epub_type: "page-list".into(),
+                heading: None,
+                entries: vec![
+                    entry("1", None, resource_target("ch1", Some("p1"))),
+                    entry("2", None, resource_target("ch2", Some("p2"))),
+                ],
+            },
+        ];
+        let doc = write_nav_xhtml(&sample_metadata(), &[], &aux, &resources, "OEBPS/nav.xhtml");
+        assert!(doc.contains(r#"<nav epub:type="landmarks">"#));
+        assert!(doc.contains("<h2>Guide</h2>"));
+        assert!(doc.contains(r#"<a epub:type="bodymatter" href="text/ch1.xhtml">Start</a>"#));
+        assert!(doc.contains(r#"href="https://example.com/?a=1""#));
+        assert!(doc.contains(r#"<nav epub:type="page-list">"#));
+        assert!(doc.contains(r#"<a href="text/ch1.xhtml#p1">1</a>"#));
+        assert!(doc.contains(r#"<a href="text/ch2.xhtml#p2">2</a>"#));
+    }
+
+    #[test]
+    fn aux_hrefs_follow_a_moved_resource() {
+        let aux = vec![AuxNav {
+            epub_type: "page-list".into(),
+            heading: None,
+            entries: vec![entry("1", None, resource_target("ch1", Some("p1")))],
+        }];
+        let before = write_nav_xhtml(
+            &sample_metadata(),
+            &[],
+            &aux,
+            &[xhtml_resource("ch1", "OEBPS/ch1.xhtml")],
+            "OEBPS/nav.xhtml",
+        );
+        assert!(before.contains(r#"<a href="ch1.xhtml#p1">1</a>"#));
+        // Same entry after the resource moved: href rewritten to follow it.
+        let after = write_nav_xhtml(
+            &sample_metadata(),
+            &[],
+            &aux,
+            &[xhtml_resource("ch1", "OEBPS/text/renamed.xhtml")],
+            "OEBPS/nav.xhtml",
+        );
+        assert!(after.contains(r#"<a href="text/renamed.xhtml#p1">1</a>"#));
+        assert!(!after.contains(r#""ch1.xhtml#p1""#));
+    }
+
+    #[test]
+    fn aux_entries_with_removed_targets_are_dropped() {
+        let resources = vec![xhtml_resource("ch1", "OEBPS/ch1.xhtml")];
+        let aux = vec![
+            AuxNav {
+                epub_type: "page-list".into(),
+                heading: None,
+                entries: vec![
+                    entry("1", None, resource_target("ch1", Some("p1"))),
+                    entry("2", None, resource_target("ch2-gone", Some("p2"))),
+                ],
+            },
+            AuxNav {
+                epub_type: "landmarks".into(),
+                heading: None,
+                entries: vec![entry(
+                    "Start",
+                    Some("bodymatter"),
+                    resource_target("ch2-gone", None),
+                )],
+            },
+        ];
+        let doc = write_nav_xhtml(&sample_metadata(), &[], &aux, &resources, "OEBPS/nav.xhtml");
+        assert!(doc.contains(r#"<a href="ch1.xhtml#p1">1</a>"#));
+        assert!(!doc.contains(">2</a>"));
+        // The landmarks nav lost its only entry: omitted entirely, so no
+        // empty <ol> reaches epubcheck.
+        assert!(!doc.contains(r#"epub:type="landmarks""#));
+    }
+
+    #[test]
+    fn landmarks_entries_without_type_or_href_are_dropped() {
+        let resources = vec![xhtml_resource("ch1", "OEBPS/ch1.xhtml")];
+        let aux = vec![AuxNav {
+            epub_type: "landmarks".into(),
+            heading: None,
+            entries: vec![
+                entry("No type", None, resource_target("ch1", None)),
+                entry("No target", Some("bodymatter"), None),
+                entry("Kept", Some("bodymatter"), resource_target("ch1", None)),
+            ],
+        }];
+        let doc = write_nav_xhtml(&sample_metadata(), &[], &aux, &resources, "OEBPS/nav.xhtml");
+        assert!(!doc.contains("No type"));
+        assert!(!doc.contains("No target"));
+        assert!(doc.contains(r#"<a epub:type="bodymatter" href="ch1.xhtml">Kept</a>"#));
     }
 }
