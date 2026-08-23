@@ -597,3 +597,43 @@ describe("annotateChapterLinks (via prepareChapterHtml)", () => {
     expect(html).not.toContain("data-epub-link");
   });
 });
+
+describe("prepareChapterHtml on huge chapters (issue #76)", () => {
+  // Regression guard for the O(n²) sanitizer walk: stripActiveContent used
+  // to recurse over live `children` HTMLCollections, which degrades to
+  // quadratic indexing on huge flat chapters (a 5 MB chapter took ~50 s in
+  // jsdom; now ~2 s, dominated by jsdom's parser). The bound is deliberately
+  // generous — it only fails when the pipeline goes superlinear again, not
+  // on a slow CI machine.
+  it("stays linear on a 20k-paragraph chapter", () => {
+    let body = "";
+    for (let i = 0; i < 20_000; i++) {
+      body +=
+        `<p id="p${i}" onclick="alert(1)">Paragraph ${i} with ` +
+        `<a href="ch${i % 50}.xhtml#p1">a link</a> and an ` +
+        `<img src="images/fig-${i % 20}.png" alt="f"/> figure. ` +
+        `Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>\n`;
+    }
+    const xhtml =
+      `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml">` +
+      `<head><title>Big</title></head><body>${body}</body></html>`;
+    const paths = new Set(
+      Array.from({ length: 500 }, (_, i) => `OEBPS/ch${i}.xhtml`),
+    );
+
+    const start = performance.now();
+    const html = prepareChapterHtml(
+      xhtml,
+      "OEBPS/ch1.xhtml",
+      asset,
+      paths,
+      "dark",
+      "paginated",
+    );
+    const elapsed = performance.now() - start;
+
+    expect(html).not.toContain("onclick=");
+    expect(html).toContain(`data-epub-link="OEBPS/ch49.xhtml#p1"`);
+    expect(elapsed).toBeLessThan(20_000);
+  }, 60_000);
+});

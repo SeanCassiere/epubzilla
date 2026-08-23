@@ -72,13 +72,24 @@ EPUB 2 books reject it with `UnsupportedFeature` like every other mutation.
 
 ## Performance budgets
 
-Measured on the reference machine (typical laptop, local SSD), release build:
+Measured on the reference machine (typical laptop, local SSD), release build.
+Two generated fixtures (issue #76): a **text-heavy** book (500 chapters,
+~50 MB Markdown) and an **image-heavy** book (250 chapters plus 100
+incompressible images, ~50 MB of image bytes). Budgets apply to both:
 
 | Operation | Budget |
 |---|---|
-| `open_book` — 500-chapter book, ~50 MB | ≤ 1000 ms |
+| `open_book` — large book (either fixture) | ≤ 1000 ms |
 | `read_chapter` — typical chapter (~50 KB XHTML) | ≤ 50 ms |
 | `write_chapter` | ≤ 50 ms (in-memory; no disk I/O) |
-| `save_book` — one chapter changed in the 500-chapter book | ≤ 500 ms |
+| `save_book` — one chapter changed in the large book | ≤ 500 ms |
+| `validate` — full native subset on the large book | ≤ 500 ms |
 
-Budgets are enforced by benchmark tests in the core crate; regressions fail CI.
+The `validate` budget exists because the frontend re-checks automatically
+after every save (issue #82); the re-check is fire-and-forget, but it must
+not occupy the per-book command queue long enough to make the next command
+feel stuck. Reference-machine numbers as of the issue #76 pass sit well
+inside these budgets (open ~2 ms, save ~20–75 ms, validate ~20–140 ms).
+
+Budgets are enforced by benchmark tests in the core crate
+(`crates/core/tests/perf_budgets.rs`); regressions fail CI.
