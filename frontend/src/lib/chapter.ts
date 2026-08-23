@@ -172,6 +172,9 @@ export function stripActiveContent(doc: Document): void {
 /** Render-layer reading theme requested by the reader UI. */
 export type ReadingTheme = "light" | "dark";
 
+/** Render-layer reading mode requested by the reader UI (issue #75). */
+export type ReadingMode = "scrolled" | "paginated";
+
 /**
  * Shared reading defaults (issue #55): books with minimal or plain CSS
  * otherwise render as full-width, left-aligned text ("unstyled html").
@@ -226,6 +229,53 @@ ${CHAPTER_BASE_CSS}
 `.trim();
 
 /**
+ * Paginated reading mode (issue #75): the body becomes a single-column
+ * CSS multicol container pinned to the viewport height, so overflowing
+ * content fragments into horizontal overflow columns — one column per
+ * page, each exactly the body's content-box width. The parent (ReaderPane)
+ * turns pages by setting `body.scrollLeft` in steps of content width +
+ * column gap; `overflow: hidden` clips the neighboring pages while still
+ * allowing programmatic scrolling. No scripts run inside the sandboxed
+ * iframe — geometry is measured and driven entirely from the parent.
+ *
+ * Composition with the other injected defaults:
+ * - The #55 reading measure (max-width cap + centered margins on body)
+ *   is untouched — the multicol content box IS the measure, so each page
+ *   is one comfortable column of text.
+ * - The #66/#78 color-scheme pins are untouched — pagination sets layout
+ *   properties only, never colors, so light/dark/auto themes compose.
+ * - Unlike the low-priority defaults, this block is appended LAST in
+ *   <head>: pagination is an explicit user choice, so at equal
+ *   specificity it wins over book CSS for the layout properties it sets
+ *   (author colors and typography still apply within each page).
+ *
+ * Presentation-only: injected into the rendered srcdoc at display time,
+ * never persisted into the EPUB.
+ */
+export const PAGINATED_CHAPTER_CSS = `
+html {
+  height: 100%;
+  overflow: hidden;
+}
+body {
+  height: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  margin-block: 0;
+  padding: 2rem 1.5rem;
+  column-count: 1;
+  column-gap: 3rem;
+  column-fill: auto;
+  orphans: 2;
+  widows: 2;
+}
+img, svg, video {
+  break-inside: avoid;
+  max-height: 90vh;
+}
+`.trim();
+
+/**
  * True when the chapter brings visual styling of its own (issue #78):
  * a linked stylesheet, an embedded <style>, or an inline `style`
  * attribute that sets colors. Such books are rendered with the light
@@ -264,6 +314,11 @@ export function chapterHasAuthorStyling(doc: Document): boolean {
  * readable. Theming is presentation-only: it lives in the injected
  * defaults block of the rendered srcdoc and never touches stored EPUB
  * content.
+ *
+ * `mode` is the requested reading mode (default "scrolled", the
+ * historical rendering). "paginated" appends PAGINATED_CHAPTER_CSS as a
+ * separate render-layer block (issue #75); like theming it never touches
+ * stored EPUB content.
  */
 export function prepareChapterHtml(
   xhtml: string,
@@ -271,6 +326,7 @@ export function prepareChapterHtml(
   resourceUrl: ResourceUrlResolver,
   xhtmlPaths: ReadonlySet<string> = new Set(),
   theme: ReadingTheme = "light",
+  mode: ReadingMode = "scrolled",
 ): string {
   const doc = new DOMParser().parseFromString(xhtml, "text/html");
   stripActiveContent(doc);
@@ -284,6 +340,15 @@ export function prepareChapterHtml(
   style.textContent = renderDark ? DARK_CHAPTER_CSS : DEFAULT_CHAPTER_CSS;
   const head = doc.head;
   head.insertBefore(style, head.firstChild);
+
+  if (mode === "paginated") {
+    const pagination = doc.createElement("style");
+    pagination.setAttribute("data-epubzilla", "pagination");
+    pagination.textContent = PAGINATED_CHAPTER_CSS;
+    // Appended last: the user's explicit layout choice outranks book CSS
+    // at equal specificity (see PAGINATED_CHAPTER_CSS).
+    head.appendChild(pagination);
+  }
 
   return "<!doctype html>\n" + (doc.documentElement?.outerHTML ?? "");
 }
