@@ -6,16 +6,43 @@
 // Apply sends the buffer through write_chapter with the buffer's own
 // format; the core does all Markdown↔XHTML conversion. Unapplied changes
 // arm the reader's navigation guard: leaving the chapter (or edit mode)
-// asks Apply / Discard / Cancel. M3.2 adds the Milkdown WYSIWYG mode over
-// this same buffer.
+// asks Apply / Discard / Cancel.
+//
+// M3.2: Markdown chapters get a [WYSIWYG | Markdown] mode switcher
+// (WYSIWYG default, choice persisted per session). Both modes edit the SAME
+// buffer string, so switching preserves content exactly and Apply sends an
+// identical payload from either mode. Xhtml chapters keep source mode only.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ContentFormat } from "@bindings/ContentFormat";
 import { useReader, describeError } from "../state/reader";
 import * as api from "../lib/api";
 import { CodeEditor } from "./CodeEditor";
+import { MilkdownEditor } from "./MilkdownEditor";
 
 type PendingLeave = { resolve: (proceed: boolean) => void } | null;
+
+type MarkdownMode = "wysiwyg" | "source";
+
+// Session persistence for the Markdown mode choice (survives remounts, not
+// meaningful across app restarts — sessionStorage scopes it naturally).
+const MODE_KEY = "epubzilla.editor.markdownMode";
+
+function storedMode(): MarkdownMode {
+  try {
+    return sessionStorage.getItem(MODE_KEY) === "source" ? "source" : "wysiwyg";
+  } catch {
+    return "wysiwyg";
+  }
+}
+
+function storeMode(mode: MarkdownMode) {
+  try {
+    sessionStorage.setItem(MODE_KEY, mode);
+  } catch {
+    // Persistence is best-effort.
+  }
+}
 
 export function EditorPane() {
   const { book, spineIndex, stopEditing, writeChapter, setNavGuard } =
@@ -29,6 +56,12 @@ export function EditorPane() {
   const [loadError, setLoadError] = useState<unknown>(null);
   const [applying, setApplying] = useState(false);
   const [pendingLeave, setPendingLeave] = useState<PendingLeave>(null);
+  const [markdownMode, setMarkdownMode] = useState<MarkdownMode>(storedMode);
+
+  const chooseMode = useCallback((mode: MarkdownMode) => {
+    setMarkdownMode(mode);
+    storeMode(mode);
+  }, []);
 
   const modified = buffer !== null && buffer !== baseline;
   const modifiedRef = useRef(modified);
@@ -122,9 +155,30 @@ export function EditorPane() {
   return (
     <div className="editor-pane">
       <div className="editor-toolbar">
-        <span className="editor-mode">
-          {format === "Markdown" ? "Markdown" : "XHTML source"}
-        </span>
+        {format === "Markdown" ? (
+          <div
+            className="editor-mode-switch"
+            role="group"
+            aria-label="Editing mode"
+          >
+            <button
+              type="button"
+              aria-pressed={markdownMode === "wysiwyg"}
+              onClick={() => chooseMode("wysiwyg")}
+            >
+              WYSIWYG
+            </button>
+            <button
+              type="button"
+              aria-pressed={markdownMode === "source"}
+              onClick={() => chooseMode("source")}
+            >
+              Markdown
+            </button>
+          </div>
+        ) : (
+          <span className="editor-mode">XHTML source</span>
+        )}
         {format === "Xhtml" && (
           <span className="editor-notice">
             This chapter uses markup outside the Markdown subset, so it is
@@ -148,6 +202,8 @@ export function EditorPane() {
         <p className="status" role="status">
           Loading chapter…
         </p>
+      ) : format === "Markdown" && markdownMode === "wysiwyg" ? (
+        <MilkdownEditor value={buffer} onChange={setBuffer} />
       ) : (
         <CodeEditor
           value={buffer}

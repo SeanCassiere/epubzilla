@@ -1,0 +1,199 @@
+// Milkdown WYSIWYG wrapper (M3.2, ADR-0007): the rich editing surface for
+// in-subset Markdown chapters. Deliberately thin, mirroring CodeEditor —
+// buffer state lives in EditorPane; the interchange format is always the
+// Markdown STRING (the Rust core does all XHTML conversion).
+//
+// Contract syntax Milkdown does not model — Pandoc-style footnotes ([^1])
+// and {.class} annotations — renders as literal text here (accepted
+// ADR-0007 consequence). Verified by src/test/m3-milkdown.test.tsx: the
+// serializer passes both through VERBATIM (no escaping, no loss), so no
+// fallback gating is needed; the raw Markdown mode remains available for
+// editing them comfortably.
+
+import { useEffect, useRef } from "react";
+import "@milkdown/kit/prose/view/style/prosemirror.css";
+import "@milkdown/kit/prose/tables/style/tables.css";
+import { Editor, defaultValueCtx, rootCtx } from "@milkdown/kit/core";
+import {
+  commonmark,
+  createCodeBlockCommand,
+  insertHrCommand,
+  toggleEmphasisCommand,
+  toggleLinkCommand,
+  toggleStrongCommand,
+  wrapInBlockquoteCommand,
+  wrapInBulletListCommand,
+  wrapInHeadingCommand,
+  wrapInOrderedListCommand,
+} from "@milkdown/kit/preset/commonmark";
+import {
+  gfm,
+  insertTableCommand,
+  toggleStrikethroughCommand,
+} from "@milkdown/kit/preset/gfm";
+import { history } from "@milkdown/kit/plugin/history";
+import { listener, listenerCtx } from "@milkdown/kit/plugin/listener";
+import { callCommand, getMarkdown, replaceAll } from "@milkdown/kit/utils";
+
+type ToolbarAction = {
+  label: string;
+  title: string;
+  run: (editor: Editor) => void;
+};
+
+const TOOLBAR: ToolbarAction[] = [
+  ...[1, 2, 3].map((level) => ({
+    label: `H${level}`,
+    title: `Heading ${level}`,
+    run: (e: Editor) => e.action(callCommand(wrapInHeadingCommand.key, level)),
+  })),
+  {
+    label: "B",
+    title: "Bold",
+    run: (e) => e.action(callCommand(toggleStrongCommand.key)),
+  },
+  {
+    label: "I",
+    title: "Italic",
+    run: (e) => e.action(callCommand(toggleEmphasisCommand.key)),
+  },
+  {
+    label: "S̶",
+    title: "Strikethrough",
+    run: (e) => e.action(callCommand(toggleStrikethroughCommand.key)),
+  },
+  {
+    label: "•",
+    title: "Bullet list",
+    run: (e) => e.action(callCommand(wrapInBulletListCommand.key)),
+  },
+  {
+    label: "1.",
+    title: "Ordered list",
+    run: (e) => e.action(callCommand(wrapInOrderedListCommand.key)),
+  },
+  {
+    label: "❝",
+    title: "Blockquote",
+    run: (e) => e.action(callCommand(wrapInBlockquoteCommand.key)),
+  },
+  {
+    label: "</>",
+    title: "Code block",
+    run: (e) => e.action(callCommand(createCodeBlockCommand.key)),
+  },
+  {
+    label: "Link",
+    title: "Link (toggles on the selection)",
+    run: (e) => {
+      const href = window.prompt("Link target (href):", "");
+      if (href === null || href === "") return;
+      e.action(callCommand(toggleLinkCommand.key, { href }));
+    },
+  },
+  {
+    label: "Table",
+    title: "Insert table",
+    run: (e) => e.action(callCommand(insertTableCommand.key)),
+  },
+  {
+    label: "―",
+    title: "Horizontal rule",
+    run: (e) => e.action(callCommand(insertHrCommand.key)),
+  },
+];
+
+export function MilkdownEditor({
+  value,
+  onChange,
+  onReady,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  /** Test hook: called with the live editor once created. */
+  onReady?: (editor: Editor) => void;
+}) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const editorRef = useRef<Editor | null>(null);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const onReadyRef = useRef(onReady);
+  onReadyRef.current = onReady;
+
+  // The last markdown this editor holds — what it emitted, or the serialized
+  // form of what was pushed into it. Breaks external-replacement feedback
+  // loops: pushes must never re-emit (a mode switch or buffer reload is not
+  // a user edit and must not dirty the buffer).
+  const heldRef = useRef(value);
+  const initialValueRef = useRef(value);
+  initialValueRef.current = value;
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (host === null) return;
+    heldRef.current = initialValueRef.current;
+    let destroyed = false;
+    const editor = Editor.make()
+      .config((ctx) => {
+        ctx.set(rootCtx, host);
+        ctx.set(defaultValueCtx, initialValueRef.current);
+        ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
+          if (markdown === heldRef.current) return;
+          heldRef.current = markdown;
+          onChangeRef.current(markdown);
+        });
+      })
+      .use(commonmark)
+      .use(gfm)
+      .use(history)
+      .use(listener);
+    void editor.create().then(() => {
+      if (destroyed) {
+        void editor.destroy();
+        return;
+      }
+      editorRef.current = editor;
+      onReadyRef.current?.(editor);
+    });
+    return () => {
+      destroyed = true;
+      editorRef.current = null;
+      void editor.destroy();
+    };
+  }, []);
+
+  // External value replacement (buffer reload) — no-op for the editor's own
+  // edits, which already set heldRef via the markdownUpdated listener. After
+  // a push, hold the *serialized* form of the new document so the listener's
+  // (possibly normalized) echo of the replace is absorbed, not emitted.
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (editor !== null && value !== heldRef.current) {
+      editor.action(replaceAll(value));
+      heldRef.current = editor.action(getMarkdown());
+    }
+  }, [value]);
+
+  return (
+    <div className="milkdown-editor">
+      <div className="milkdown-toolbar" role="toolbar" aria-label="Formatting">
+        {TOOLBAR.map((action) => (
+          <button
+            key={action.title}
+            type="button"
+            title={action.title}
+            aria-label={action.title}
+            onMouseDown={(e) => e.preventDefault() /* keep the selection */}
+            onClick={() => {
+              const editor = editorRef.current;
+              if (editor !== null) action.run(editor);
+            }}
+          >
+            {action.label}
+          </button>
+        ))}
+      </div>
+      <div className="milkdown-host" ref={hostRef} />
+    </div>
+  );
+}

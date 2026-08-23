@@ -476,3 +476,91 @@ body {
 .code-editor .cm-editor {
   height: 100%;
 }
+
+/* WYSIWYG mode (M3.2). */
+.editor-mode-switch {
+  display: inline-flex;
+  gap: 0;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.editor-mode-switch button {
+  border: none;
+  border-radius: 0;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.8rem;
+  background: transparent;
+}
+
+.editor-mode-switch button + button {
+  border-left: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+}
+
+.editor-mode-switch button[aria-pressed="true"] {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  font-weight: 600;
+}
+
+.milkdown-editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.milkdown-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.3rem 1rem;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+}
+
+.milkdown-toolbar button {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.8rem;
+  min-width: 2rem;
+}
+
+.milkdown-host {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.milkdown-host .milkdown {
+  height: 100%;
+}
+
+.milkdown-host .ProseMirror {
+  min-height: 100%;
+  padding: 1rem 1.25rem;
+  outline: none;
+  line-height: 1.6;
+}
+
+.milkdown-host .ProseMirror blockquote {
+  border-left: 3px solid color-mix(in srgb, currentColor 30%, transparent);
+  margin-left: 0;
+  padding-left: 0.9rem;
+  opacity: 0.9;
+}
+
+.milkdown-host .ProseMirror pre {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  padding: 0.6rem 0.8rem;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.milkdown-host .ProseMirror table {
+  border-collapse: collapse;
+}
+
+.milkdown-host .ProseMirror th,
+.milkdown-host .ProseMirror td {
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  padding: 0.25rem 0.6rem;
+}
