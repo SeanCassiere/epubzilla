@@ -22,8 +22,14 @@ import epub2Raw from "./fixtures/epub2.json";
 /** What the frontend receives for one open fixture book. */
 export interface Fixture {
   book: Book;
-  /** `read_chapter` result per spine resource id. */
+  /** `read_chapter(prefer: Xhtml)` result per spine resource id. */
   chapters: Record<string, ChapterContent>;
+  /**
+   * `read_chapter(prefer: Markdown)` result per spine resource id (M3.4):
+   * REAL core conversion output — in-subset chapters have
+   * `format: "Markdown"`, out-of-subset ones fall back to `format: "Xhtml"`.
+   */
+  markdown: Record<string, ChapterContent>;
 }
 
 /** JSON wire form: identical to the bindings except `size` is a number. */
@@ -32,6 +38,7 @@ type RawBook = Omit<Book, "resources"> & { resources: RawResource[] };
 interface RawFixture {
   book: RawBook;
   chapters: Record<string, ChapterContent>;
+  markdown: Record<string, ChapterContent>;
 }
 
 function decode(raw: RawFixture): Fixture {
@@ -41,6 +48,7 @@ function decode(raw: RawFixture): Fixture {
       resources: raw.book.resources.map((r) => ({ ...r, size: BigInt(r.size) })),
     },
     chapters: raw.chapters,
+    markdown: raw.markdown,
   };
 }
 

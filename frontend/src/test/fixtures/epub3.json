@@ -139,5 +139,27 @@
       "format": "Xhtml",
       "resource": "notes"
     }
+  },
+  "markdown": {
+    "ch1": {
+      "content": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\">\n<head>\n  <title>Chapter 1</title>\n  <link rel=\"stylesheet\" type=\"text/css\" href=\"../styles/book.css\"/>\n</head>\n<body>\n<h1>Chapter 1 — Ünïcode ✓</h1>\n<p><img src=\"../images/pic.png\" alt=\"fixture image\"/></p>\n<p>Onwards to <a href=\"ch2.xhtml#sec21\">Section 2.1</a> or outside to\n<a href=\"https://example.com/\">example.com</a>.</p>\n<script>document.title = \"must be stripped\";</script>\n</body>\n</html>\n",
+      "format": "Xhtml",
+      "resource": "ch1"
+    },
+    "ch2": {
+      "content": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\">\n<head>\n  <title>Chapter 2</title>\n  <link rel=\"stylesheet\" type=\"text/css\" href=\"../styles/book.css\"/>\n</head>\n<body>\n<h1>Chapter 2</h1>\n<p>Back to <a href=\"ch1.xhtml\">Chapter 1</a>.</p>\n<h2 id=\"sec21\">Section 2.1</h2>\n<p>Fragment target.</p>\n</body>\n</html>\n",
+      "format": "Xhtml",
+      "resource": "ch2"
+    },
+    "ch3": {
+      "content": "# Chapter 3\n\nThe end.\n",
+      "format": "Markdown",
+      "resource": "ch3"
+    },
+    "notes": {
+      "content": "# Notes\n\nNon-linear auxiliary content.\n",
+      "format": "Markdown",
+      "resource": "notes"
+    }
   }
 }

@@ -106,6 +106,7 @@ function mockBackend(fixtures: Fixture[]): InvokeCall[] {
           dirty: true,
         };
         open.set(updated.id, {
+          ...fixture,
           book: updated,
           chapters: {
             ...fixture.chapters,
