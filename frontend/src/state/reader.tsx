@@ -14,6 +14,7 @@ import {
 } from "react";
 import type { Book } from "@bindings/Book";
 import type { ChapterContent } from "@bindings/ChapterContent";
+import type { Metadata } from "@bindings/Metadata";
 import * as api from "../lib/api";
 
 export type ReaderStatus = "idle" | "opening" | "loading-chapter" | "ready";
@@ -32,6 +33,17 @@ interface ReaderState {
   /** CoreError from the last failed command (render via describeError). */
   error: unknown;
   openBook: (path: string) => Promise<void>;
+  /**
+   * create_book: the new Book slots in exactly like an opened one (title
+   * page renders, nav shows). Resolves true on success so callers (the
+   * new-book dialog) know whether to close.
+   */
+  createBook: (metadata: Metadata) => Promise<boolean>;
+  /**
+   * update_metadata on the open book; the returned Book replaces state
+   * (position and current chapter are kept — only the model changed).
+   */
+  updateMetadata: (metadata: Metadata) => Promise<boolean>;
   goTo: (spineIndex: number) => Promise<void>;
   /** Navigate by zip-internal resource path (TOC entries, chapter links). */
   goToResource: (path: string, fragment: string | null) => Promise<void>;
@@ -81,32 +93,69 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  const openBook = useCallback(
-    async (path: string) => {
+  /**
+   * Make `next` the open book (from open_book OR create_book — both return
+   * a full Book that slots in identically) and load its first linear
+   * chapter. Resolves true on success.
+   */
+  const adoptBook = useCallback(
+    async (acquire: () => Promise<Book>): Promise<boolean> => {
       setStatus("opening");
       setError(null);
       try {
         const previous = book;
-        const opened = await api.openBook(path);
-        setBook(opened);
+        const next = await acquire();
+        setBook(next);
         setChapter(null);
-        if (previous !== null && previous.id !== opened.id) {
+        if (previous !== null && previous.id !== next.id) {
           // Best-effort session cleanup; ignore failures.
           api.closeBook(previous.id).catch(() => undefined);
         }
-        const first = findLinear(opened, 0, 1);
+        const first = findLinear(next, 0, 1);
         if (first === -1) {
           setSpineIndex(-1);
           setStatus("ready");
         } else {
-          await loadChapter(opened, first);
+          await loadChapter(next, first);
         }
+        return true;
       } catch (err) {
         setError(err);
         setStatus(book === null ? "idle" : "ready");
+        return false;
       }
     },
     [book, loadChapter],
+  );
+
+  const openBook = useCallback(
+    async (path: string) => {
+      await adoptBook(() => api.openBook(path));
+    },
+    [adoptBook],
+  );
+
+  const createBook = useCallback(
+    (metadata: Metadata) => adoptBook(() => api.createBook(metadata)),
+    [adoptBook],
+  );
+
+  const updateMetadata = useCallback(
+    async (metadata: Metadata): Promise<boolean> => {
+      if (book === null) return false;
+      setError(null);
+      try {
+        const updated = await api.updateMetadata(book.id, metadata);
+        // Same book, same spine position — only the model (and dirty flag,
+        // displayed from M2.4) changed.
+        setBook(updated);
+        return true;
+      } catch (err) {
+        setError(err);
+        return false;
+      }
+    },
+    [book],
   );
 
   const goTo = useCallback(
@@ -155,6 +204,8 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       status,
       error,
       openBook,
+      createBook,
+      updateMetadata,
       goTo,
       goToResource,
       nextChapter,
@@ -168,6 +219,8 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       status,
       error,
       openBook,
+      createBook,
+      updateMetadata,
       goTo,
       goToResource,
       nextChapter,

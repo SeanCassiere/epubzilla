@@ -191,3 +191,115 @@ body {
   padding: 2rem;
   text-align: center;
 }
+
+/* Metadata dialogs (M2.2): centered modal over a dimmed backdrop. */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.modal {
+  background: Canvas;
+  color: CanvasText;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  padding: 1rem 1.25rem 1.25rem;
+  width: min(26rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 4rem);
+  overflow-y: auto;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+}
+
+.modal-title {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+
+.metadata-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.metadata-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.metadata-field input,
+.metadata-field textarea {
+  font: inherit;
+  padding: 0.3rem 0.45rem;
+}
+
+.metadata-field input[readonly] {
+  opacity: 0.7;
+}
+
+.metadata-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+.metadata-generated {
+  font-size: 0.85rem;
+  font-style: italic;
+  opacity: 0.6;
+}
+
+.metadata-field-error {
+  color: #c0392b;
+  font-size: 0.8rem;
+}
+
+.metadata-authors {
+  border: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  align-items: flex-start;
+}
+
+.metadata-author-row {
+  display: flex;
+  gap: 0.35rem;
+  width: 100%;
+}
+
+.metadata-author-row input {
+  flex: 1;
+  font: inherit;
+  padding: 0.3rem 0.45rem;
+}
+
+.metadata-extras summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+.metadata-extras[open] summary {
+  margin-bottom: 0.5rem;
+}
+
+.metadata-extras {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.metadata-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
