@@ -4,6 +4,10 @@ on:
   push:
     tags:
       - "v*"
+  # Dispatched at a tag ref by the "Cut release" workflow (tags pushed with
+  # GITHUB_TOKEN don't trigger `push` workflows). github.ref_name is the tag
+  # either way. Only dispatch this at a v* tag ref.
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always

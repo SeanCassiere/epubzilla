@@ -1,30 +1,28 @@
 # epubzilla
 
-An application for previewing, creating, and editing EPUB files — fast.
+A fast desktop application for previewing, creating, and editing EPUB files.
+Tauri (Rust core) + React.
 
-## Goals
+**[Download the latest release](https://github.com/SeanCassiere/epubzilla/releases)**
+— installers for macOS, Windows, and Linux. Builds are unsigned for now: on
+macOS, right-click → Open the first time; on Windows, SmartScreen may warn.
 
-- **Preview**: open and read EPUB files with fast rendering.
-- **Create**: scaffold new EPUBs with title pages, metadata, and chapters.
-- **Edit**: modify chapter content via a WYSIWYG or Markdown-based editor.
-- **Performance**: reading, editing, and creation should feel instant, leveraging a performant core language and/or existing libraries.
+## Features
 
-## Status
-
-**v0.2.0 released** — grab installers for macOS, Windows, and Linux from
-[Releases](https://github.com/SeanCassiere/epubzilla/releases) (unsigned for
-now: on macOS, right-click → Open the first time).
-
-The desktop app covers the full loop: open and read EPUB 2/3 books (TOC
-navigation, faithful rendering), create new EPUB 3 books (metadata, title
-page, chapter management), and edit chapters as Markdown — WYSIWYG (Milkdown)
-or raw (CodeMirror) — with XHTML source mode for content outside the Markdown
-subset, image insertion, and atomic incremental saves that pass epubcheck.
+- **Read**: open EPUB 2/3 books with faithful rendering (the book's own CSS
+  and images, sandboxed), TOC navigation, and spine paging with keyboard
+  shortcuts.
+- **Create**: new EPUB 3 books with metadata, a generated title page, and
+  chapter management (add, remove, reorder).
+- **Edit**: chapters as Markdown — WYSIWYG (Milkdown) or raw (CodeMirror) —
+  with XHTML source mode for content outside the Markdown subset (never
+  lossy), image insertion, and unsaved-changes guards.
+- **Fast and safe**: atomic incremental saves that pass epubcheck; a
+  500-chapter book opens in ~5 ms. Performance budgets are contractual and
+  enforced in CI.
 
 Underneath, the UI-free Rust core (`crates/core`) implements the contracts in
-`docs/contracts/`, with epubcheck-clean output and performance budgets
-enforced in CI (a 500-chapter book opens in ~5ms). A CLI harness
-(`crates/cli`) exercises the whole surface:
+`docs/contracts/`. A CLI harness (`crates/cli`) exercises the whole surface:
 
 ```sh
 # Metadata, spine, and table of contents
@@ -65,23 +63,28 @@ generated `crates/core/bindings/` (`@bindings/*` alias) — regenerate with
 
 ### Releases
 
-Tag pushes matching `v*` trigger the release workflow
-(`.github/workflows/release.yml`), which builds installers with
+The release workflow (`.github/workflows/release.yml`) builds installers with
 [tauri-action](https://github.com/tauri-apps/tauri-action) for macOS
-(Apple Silicon dmg/app), Linux (AppImage/deb), and Windows (msi/nsis), and
-uploads them to a **draft** GitHub Release with notes generated from merged
-PRs since the previous tag. Review and publish the draft manually.
+(Apple Silicon dmg/app), Linux (AppImage/deb/rpm), and Windows (msi/nsis),
+and uploads them to a **draft** GitHub Release with notes generated from
+merged PRs since the previous tag. Review and publish the draft manually.
 
-To cut a release:
+Two ways to cut a release:
 
-```sh
-pnpm bump 0.2.0          # rewrites version in package.json, frontend/package.json,
-                         # Cargo.toml [workspace.package], crates/app/tauri.conf.json
-cargo check --workspace  # refresh Cargo.lock
-git add -A && git commit -m "v0.2.0"
-git tag v0.2.0
-git push && git push --tags
-```
+1. **GitHub Actions (recommended)**: run the **Cut release** workflow
+   (Actions → Cut release → Run workflow) and enter the version `X.Y.Z`. It
+   bumps the version files, commits, tags `vX.Y.Z`, and starts the release
+   build.
+2. **Locally**:
+
+   ```sh
+   pnpm bump 0.3.0          # rewrites version in package.json, frontend/package.json,
+                            # Cargo.toml [workspace.package], crates/app/tauri.conf.json
+   cargo check --workspace  # refresh Cargo.lock
+   git add -A && git commit -m "v0.3.0"
+   git tag -a v0.3.0 -m "v0.3.0"
+   git push && git push --tags
+   ```
 
 Builds are currently unsigned: on macOS, right-click the app and choose
 "Open" the first time to bypass Gatekeeper; on Windows, SmartScreen may warn

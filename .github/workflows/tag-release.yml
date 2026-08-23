@@ -1,0 +1,67 @@
+name: Cut release
+
+# Manual release entry point: bumps version files, commits, tags vX.Y.Z, and
+# starts the Release workflow at that tag. Equivalent to the local flow in
+# README > Development > Releases.
+#
+# The explicit `gh workflow run` at the end is required: tags pushed with the
+# workflow's GITHUB_TOKEN intentionally do NOT trigger other workflows
+# (GitHub's recursion guard), so the tag push alone would never build.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (X.Y.Z, no leading v)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Validate version
+        run: |
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "::error::version must be X.Y.Z (got '$VERSION')"; exit 1; }
+
+      - uses: actions/checkout@v4
+
+      - name: Refuse to overwrite an existing tag
+        run: |
+          if git ls-remote --tags origin "refs/tags/v$VERSION" | grep -q .; then
+            echo "::error::tag v$VERSION already exists"; exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Bump version files
+        run: node scripts/bump-version.mjs "$VERSION"
+
+      - name: Refresh Cargo.lock
+        run: cargo update --workspace
+
+      - name: Commit, tag, push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "v$VERSION"
+          git tag -a "v$VERSION" -m "v$VERSION"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "v$VERSION"
+
+      - name: Start the release build at the new tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "v$VERSION"
