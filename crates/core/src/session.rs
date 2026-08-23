@@ -46,6 +46,10 @@ struct OpenBook {
     package_path: String,
     /// Manifest item carrying `properties="nav"`, if any.
     nav_resource: Option<ResourceId>,
+    /// Non-toc navs (landmarks, page-list, …) from the source nav document,
+    /// re-emitted verbatim (hrefs recomputed) whenever the nav is rebuilt so
+    /// structural mutations never strip author-provided navigation (#71).
+    aux_navs: Vec<nav::AuxNav>,
     /// NCX manifest item (spine `toc` idref), if any.
     ncx_resource: Option<ResourceId>,
     /// True for books from `create_book`: the "titlepage" resource is
@@ -123,7 +127,7 @@ impl Session {
         let mut resources = package.resources;
         fill_sizes(&mut resources, &mut container);
 
-        let nav = parse_nav(
+        let (nav, aux_navs) = parse_nav(
             &mut container,
             &resources,
             package.nav_resource.as_deref(),
@@ -162,6 +166,7 @@ impl Session {
                 removed: HashSet::new(),
                 package_path,
                 nav_resource: package.nav_resource,
+                aux_navs,
                 ncx_resource: package.ncx_resource,
                 generated_title_page: false,
                 added_resources: HashSet::new(),
@@ -197,7 +202,7 @@ impl Session {
             href: Some(title_page_path.clone()),
             children: Vec::new(),
         }];
-        let nav_doc = writer::write_nav_xhtml(&metadata, &nav_points, &nav_path);
+        let nav_doc = writer::write_nav_xhtml(&metadata, &nav_points, &[], &[], &nav_path);
 
         let mut overlay = HashMap::new();
         overlay.insert(
@@ -247,6 +252,7 @@ impl Session {
                 removed: HashSet::new(),
                 package_path: DEFAULT_PACKAGE_PATH.to_owned(),
                 nav_resource: Some("nav".to_owned()),
+                aux_navs: Vec::new(),
                 ncx_resource: None,
                 generated_title_page: true,
                 added_resources: HashSet::new(),
@@ -1056,7 +1062,14 @@ fn regenerate_nav(open: &mut OpenBook) {
     else {
         return;
     };
-    let bytes = writer::write_nav_xhtml(&open.book.metadata, &open.book.nav, &path).into_bytes();
+    let bytes = writer::write_nav_xhtml(
+        &open.book.metadata,
+        &open.book.nav,
+        &open.aux_navs,
+        &open.book.resources,
+        &path,
+    )
+    .into_bytes();
     let size = bytes.len() as u64;
     open.overlay.insert(path, bytes);
     if let Some(r) = open.book.resources.iter_mut().find(|r| r.id == nav_id) {
@@ -1367,13 +1380,15 @@ fn fill_sizes(resources: &mut [Resource], container: &mut OcfContainer<File>) {
     }
 }
 
-/// Prefer the EPUB 3 nav document, fall back to the NCX, else empty.
+/// Prefer the EPUB 3 nav document, fall back to the NCX, else empty. For the
+/// EPUB 3 path the second element is the preserved non-toc navs (landmarks,
+/// page-list, …); the NCX has no equivalent.
 fn parse_nav(
     container: &mut OcfContainer<File>,
     resources: &[Resource],
     nav_resource: Option<&str>,
     ncx_resource: Option<&str>,
-) -> CoreResult<Vec<NavPoint>> {
+) -> CoreResult<(Vec<NavPoint>, Vec<nav::AuxNav>)> {
     let path_of = |id: &str| {
         resources
             .iter()
@@ -1382,13 +1397,15 @@ fn parse_nav(
     };
     if let Some(path) = nav_resource.and_then(path_of) {
         let bytes = container.read_entry(&path)?;
-        return nav::parse_nav_xhtml(&bytes, &path);
+        let toc = nav::parse_nav_xhtml(&bytes, &path)?;
+        let aux = nav::parse_aux_navs(&bytes, &path, resources)?;
+        return Ok((toc, aux));
     }
     if let Some(path) = ncx_resource.and_then(path_of) {
         let bytes = container.read_entry(&path)?;
-        return nav::parse_ncx(&bytes, &path);
+        return Ok((nav::parse_ncx(&bytes, &path)?, Vec::new()));
     }
-    Ok(Vec::new())
+    Ok((Vec::new(), Vec::new()))
 }
 
 #[cfg(test)]
@@ -1492,6 +1509,111 @@ mod tests {
             ("OEBPS/ch2.xhtml", CH2),
             ("OEBPS/style.css", CSS),
         ]
+    }
+
+    /// Nav document with author-provided landmarks and page-list navs (#71).
+    const NAV_WITH_AUX: &str = r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<body>
+<nav epub:type="toc"><ol>
+  <li><a href="ch1.xhtml">Chapter 1</a></li>
+  <li><a href="ch2.xhtml">Chapter 2</a></li>
+</ol></nav>
+<nav epub:type="landmarks"><h2>Guide</h2><ol>
+  <li><a epub:type="bodymatter" href="ch1.xhtml">Start &amp; Begin</a></li>
+  <li><a epub:type="toc" href="nav.xhtml">Contents</a></li>
+</ol></nav>
+<nav epub:type="page-list"><ol>
+  <li><a href="ch1.xhtml#p1">1</a></li>
+  <li><a href="ch2.xhtml#p2">2</a></li>
+</ol></nav>
+</body></html>"#;
+
+    fn epub3_aux_entries() -> Vec<(&'static str, &'static str)> {
+        let mut entries = epub3_entries();
+        for entry in &mut entries {
+            if entry.0 == "OEBPS/nav.xhtml" {
+                entry.1 = NAV_WITH_AUX;
+            }
+        }
+        entries
+    }
+
+    fn nav_doc(session: &mut Session, book_id: &str) -> String {
+        String::from_utf8(session.read_resource(book_id, "nav").unwrap()).unwrap()
+    }
+
+    #[test]
+    fn add_chapter_preserves_landmarks_and_page_list() {
+        let path = write_epub("aux-add.epub", &epub3_aux_entries());
+        let mut session = Session::new();
+        let book = session.open_book(&path).unwrap();
+        session.add_chapter(&book.id, "Chapter 3", None).unwrap();
+
+        let nav = nav_doc(&mut session, &book.id);
+        assert!(nav.contains(r#"<nav epub:type="landmarks">"#));
+        assert!(nav.contains("<h2>Guide</h2>"));
+        assert!(nav.contains(r#"<a epub:type="bodymatter" href="ch1.xhtml">Start &amp; Begin</a>"#));
+        assert!(nav.contains(r#"<a epub:type="toc" href="nav.xhtml">Contents</a>"#));
+        assert!(nav.contains(r#"<nav epub:type="page-list">"#));
+        assert!(nav.contains(r#"<a href="ch1.xhtml#p1">1</a>"#));
+        assert!(nav.contains(r#"<a href="ch2.xhtml#p2">2</a>"#));
+        // The toc itself was rebuilt with the new chapter.
+        assert!(nav.contains("Chapter 3"));
+    }
+
+    #[test]
+    fn reorder_preserves_landmarks_and_page_list() {
+        let path = write_epub("aux-reorder.epub", &epub3_aux_entries());
+        let mut session = Session::new();
+        let book = session.open_book(&path).unwrap();
+        session
+            .reorder_spine(&book.id, &["spine-1".to_owned(), "spine-0".to_owned()])
+            .unwrap();
+
+        let nav = nav_doc(&mut session, &book.id);
+        assert!(nav.contains(r#"<nav epub:type="landmarks">"#));
+        assert!(nav.contains(r#"<nav epub:type="page-list">"#));
+        assert!(nav.contains(r#"<a href="ch1.xhtml#p1">1</a>"#));
+        assert!(nav.contains(r#"<a href="ch2.xhtml#p2">2</a>"#));
+    }
+
+    #[test]
+    fn remove_chapter_drops_aux_entries_for_the_removed_doc() {
+        let path = write_epub("aux-remove.epub", &epub3_aux_entries());
+        let mut session = Session::new();
+        let book = session.open_book(&path).unwrap();
+        // Remove ch2 (spine-1): its page-list entry must go, the rest stays.
+        session.remove_chapter(&book.id, "spine-1").unwrap();
+
+        let nav = nav_doc(&mut session, &book.id);
+        assert!(nav.contains(r#"<nav epub:type="landmarks">"#));
+        assert!(nav.contains(r#"<a epub:type="bodymatter" href="ch1.xhtml">Start &amp; Begin</a>"#));
+        assert!(nav.contains(r#"<a href="ch1.xhtml#p1">1</a>"#));
+        assert!(!nav.contains("ch2.xhtml"));
+    }
+
+    #[test]
+    fn saved_book_round_trips_landmarks_and_page_list() {
+        let path = write_epub("aux-roundtrip.epub", &epub3_aux_entries());
+        let mut session = Session::new();
+        let book = session.open_book(&path).unwrap();
+        session.add_chapter(&book.id, "Chapter 3", None).unwrap();
+        let saved = path.with_file_name("aux-roundtrip-saved.epub");
+        session
+            .save_book(&book.id, Some(saved.to_string_lossy().into_owned()))
+            .unwrap();
+
+        let reopened = session.open_book(&saved).unwrap();
+        let nav = nav_doc(&mut session, &reopened.id);
+        assert!(nav.contains(r#"<nav epub:type="landmarks">"#));
+        assert!(nav.contains(r#"<nav epub:type="page-list">"#));
+        // And a further mutation on the reopened book still preserves them.
+        session
+            .add_chapter(&reopened.id, "Chapter 4", None)
+            .unwrap();
+        let nav = nav_doc(&mut session, &reopened.id);
+        assert!(nav.contains(r#"<nav epub:type="landmarks">"#));
+        assert!(nav.contains(r#"<a href="ch2.xhtml#p2">2</a>"#));
     }
 
     #[test]

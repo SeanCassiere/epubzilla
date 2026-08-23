@@ -174,11 +174,154 @@ fn generate_epubcheck_fixtures() {
         .unwrap();
     assert_eq!(untouched.format, ContentFormat::Markdown);
 
+    // Fixture 5 (#71): landmarks + page-list navs carried through structural
+    // mutations. Open a book whose nav document ships both, add a chapter,
+    // reorder, then remove a chapter referenced by the page-list — the saved
+    // nav must keep the landmarks and page-list navs (entries pointing at the
+    // removed doc dropped), and epubcheck validates the result in CI.
+    let source = build_aux_nav_epub(&dir);
+    let book = session.open_book(&source).unwrap();
+    let book_id = book.id.clone();
+    session.add_chapter(&book_id, "Appendix ✓", None).unwrap();
+    let book = session.get_book(&book_id).unwrap();
+    let order: Vec<SpineItemId> = vec![
+        book.spine[1].id.clone(),
+        book.spine[0].id.clone(),
+        book.spine[2].id.clone(),
+    ];
+    session.reorder_spine(&book_id, &order).unwrap();
+    // ch2 is referenced by the page-list; removing it must drop that entry
+    // (not leave a dangling href) while the rest of both navs survives.
+    let book = session.get_book(&book_id).unwrap();
+    let ch2_item = book
+        .spine
+        .iter()
+        .find(|s| s.resource == "ch2")
+        .unwrap()
+        .id
+        .clone();
+    session.remove_chapter(&book_id, &ch2_item).unwrap();
+    assert!(session.validate(&book_id).unwrap().is_empty());
+    let preserved = dir.join("preserved-aux-navs.epub");
+    session
+        .save_book(&book_id, Some(preserved.to_string_lossy().into_owned()))
+        .unwrap();
+    std::fs::remove_file(&source).unwrap();
+    // Reopen and prove the saved nav still carries both navs, minus the
+    // removed doc's entry.
+    {
+        let reopened = session.open_book(&preserved).unwrap();
+        let nav_bytes = session.read_resource(&reopened.id, "nav").unwrap();
+        let nav = String::from_utf8(nav_bytes).unwrap();
+        assert!(nav.contains(r#"epub:type="landmarks""#));
+        assert!(nav.contains(r#"epub:type="page-list""#));
+        assert!(nav.contains("ch1.xhtml#page1"));
+        assert!(!nav.contains("ch2.xhtml"));
+    }
+
     // All must reopen cleanly; epubcheck does the deep validation in CI.
     session.open_book(&created).unwrap();
     session.open_book(&resaved).unwrap();
     let reopened = session.open_book(&mutated).unwrap();
     assert!(session.validate(&reopened.id).unwrap().is_empty());
+}
+
+/// Hand-build a valid EPUB 3 whose nav document ships landmarks and
+/// page-list navs alongside the toc (#71). Page-list fragments target real
+/// `id`s in the chapters so epubcheck's fragment resolution stays green.
+fn build_aux_nav_epub(dir: &std::path::Path) -> PathBuf {
+    const CONTAINER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>
+"#;
+    const OPF: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">urn:uuid:5a11ad0e-2222-4e6e-8e6e-000000000002</dc:identifier>
+    <dc:title>Ländmarks Sœurce ✓</dc:title>
+    <dc:creator>Nav Keeper</dc:creator>
+    <dc:language>en</dc:language>
+    <meta property="dcterms:modified">2026-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+    <itemref idref="ch2"/>
+  </spine>
+</package>
+"#;
+    const NAV: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="en" lang="en">
+<head><title>Contents</title></head>
+<body>
+  <nav epub:type="toc">
+    <h1>Contents</h1>
+    <ol>
+      <li><a href="ch1.xhtml">Chäpter One</a></li>
+      <li><a href="ch2.xhtml">Chapter Two</a></li>
+    </ol>
+  </nav>
+  <nav epub:type="landmarks">
+    <h2>Guide</h2>
+    <ol>
+      <li><a epub:type="toc" href="nav.xhtml">Table of Contents</a></li>
+      <li><a epub:type="bodymatter" href="ch1.xhtml">Start of Content</a></li>
+    </ol>
+  </nav>
+  <nav epub:type="page-list" hidden="hidden">
+    <ol>
+      <li><a href="ch1.xhtml#page1">1</a></li>
+      <li><a href="ch2.xhtml#page2">2</a></li>
+    </ol>
+  </nav>
+</body>
+</html>
+"#;
+    const CH1: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="en" lang="en">
+<head><title>Chäpter One</title></head>
+<body><h1>Chäpter One</h1><span epub:type="pagebreak" id="page1" title="1"/><p>First chapter with a päge anchor ✓.</p></body>
+</html>
+"#;
+    const CH2: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="en" lang="en">
+<head><title>Chapter Two</title></head>
+<body><h1>Chapter Two</h1><span epub:type="pagebreak" id="page2" title="2"/><p>Second chapter body.</p></body>
+</html>
+"#;
+
+    let path = dir.join("aux-source-tmp.epub");
+    let file = std::fs::File::create(&path).unwrap();
+    let mut writer = zip::ZipWriter::new(file);
+    let entries: &[(&str, &str)] = &[
+        ("mimetype", "application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("OEBPS/content.opf", OPF),
+        ("OEBPS/nav.xhtml", NAV),
+        ("OEBPS/ch1.xhtml", CH1),
+        ("OEBPS/ch2.xhtml", CH2),
+    ];
+    for (name, content) in entries {
+        let options = if *name == "mimetype" {
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored)
+        } else {
+            SimpleFileOptions::default()
+        };
+        writer.start_file(*name, options).unwrap();
+        writer.write_all(content.as_bytes()).unwrap();
+    }
+    writer.finish().unwrap();
+    path
 }
 
 /// Hand-build a valid multi-chapter EPUB 3 to exercise the incremental path.
