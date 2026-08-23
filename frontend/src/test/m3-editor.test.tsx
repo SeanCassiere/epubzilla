@@ -1,9 +1,10 @@
-// M3.1: edit-mode foundation (issue #43).
+// M3.1: edit-mode foundation (issue #43) · M3.2: WYSIWYG mode (issue #44).
 //
-// Real <App/> over mocked IPC (harness pattern from m1.test.tsx). The
-// CodeMirror surface is mocked to a plain <textarea> — CM6 needs real
-// layout APIs jsdom lacks; its wrapper is thin and the buffer logic under
-// test lives in EditorPane/state.
+// Real <App/> over mocked IPC (harness pattern from m1.test.tsx). Both
+// editor surfaces are mocked to plain <textarea>s — the wrappers are thin
+// and the buffer/mode logic under test lives in EditorPane/state. The real
+// Milkdown surface is exercised in m3-milkdown.test.tsx. The mocks tag
+// themselves with data-surface so tests can tell which mode is mounted.
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -31,6 +32,24 @@ vi.mock("../components/CodeEditor", () => ({
     <textarea
       aria-label="chapter buffer"
       data-language={language}
+      value={value}
+      data-surface="source"
+      onChange={(e) => onChange(e.target.value)}
+    />
+  ),
+}));
+
+vi.mock("../components/MilkdownEditor", () => ({
+  MilkdownEditor: ({
+    value,
+    onChange,
+  }: {
+    value: string;
+    onChange: (next: string) => void;
+  }) => (
+    <textarea
+      aria-label="chapter buffer"
+      data-surface="wysiwyg"
       value={value}
       onChange={(e) => onChange(e.target.value)}
     />
@@ -107,6 +126,7 @@ beforeAll(() => {
 afterEach(() => {
   cleanup();
   clearMocks();
+  sessionStorage.clear(); // markdown-mode persistence must not leak
 });
 
 describe("M3.1 edit mode", () => {
@@ -118,7 +138,8 @@ describe("M3.1 edit mode", () => {
       "chapter buffer",
     )) as HTMLTextAreaElement;
     expect(buffer.value).toBe(MD);
-    expect(buffer.getAttribute("data-language")).toBe("markdown");
+    // M3.2: Markdown chapters open in WYSIWYG by default.
+    expect(buffer.getAttribute("data-surface")).toBe("wysiwyg");
     const read = calls.filter(
       (c) => c.cmd === "read_chapter" && c.args.prefer === "Markdown",
     );
@@ -157,6 +178,8 @@ describe("M3.1 edit mode", () => {
     const buffer = await screen.findByLabelText("chapter buffer");
     expect(buffer.getAttribute("data-language")).toBe("xml");
     expect(screen.getByText(/outside the Markdown subset/)).toBeTruthy();
+    // M3.2: no WYSIWYG option for XHTML source chapters.
+    expect(screen.queryByRole("group", { name: "Editing mode" })).toBeNull();
     fireEvent.change(buffer, { target: { value: "<p>edited</p>" } });
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     await waitFor(() => {
@@ -217,5 +240,108 @@ describe("M3.1 edit mode", () => {
       expect(calls.some((c) => c.cmd === "read_chapter")).toBe(true),
     );
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+  });
+});
+
+describe("M3.2 WYSIWYG mode", () => {
+  async function findBuffer(): Promise<HTMLTextAreaElement> {
+    return (await screen.findByLabelText(
+      "chapter buffer",
+    )) as HTMLTextAreaElement;
+  }
+
+  it("renders the mode switcher with WYSIWYG as the default", async () => {
+    const calls = mockBackend(epub3Fixture(), { ch1: MD });
+    await openFixtureAndEdit(calls);
+    await findBuffer();
+
+    const group = screen.getByRole("group", { name: "Editing mode" });
+    const wysiwyg = screen.getByRole("button", { name: "WYSIWYG" });
+    const source = screen.getByRole("button", { name: "Markdown" });
+    expect(group.contains(wysiwyg)).toBe(true);
+    expect(group.contains(source)).toBe(true);
+    expect(wysiwyg.getAttribute("aria-pressed")).toBe("true");
+    expect(source.getAttribute("aria-pressed")).toBe("false");
+    expect((await findBuffer()).getAttribute("data-surface")).toBe("wysiwyg");
+  });
+
+  it("switches modes over the same buffer, preserving content exactly", async () => {
+    const calls = mockBackend(epub3Fixture(), { ch1: MD });
+    await openFixtureAndEdit(calls);
+
+    // Edit in WYSIWYG, switch without applying — content carries over.
+    const edited = `${MD}\n\nEdited in WYSIWYG.`;
+    fireEvent.change(await findBuffer(), { target: { value: edited } });
+    fireEvent.click(screen.getByRole("button", { name: "Markdown" }));
+    const sourceBuffer = await findBuffer();
+    expect(sourceBuffer.getAttribute("data-surface")).toBe("source");
+    expect(sourceBuffer.getAttribute("data-language")).toBe("markdown");
+    expect(sourceBuffer.value).toBe(edited);
+    // No guard dialog, no write: switching is not navigation.
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(calls.some((c) => c.cmd === "write_chapter")).toBe(false);
+
+    // And back again, still intact.
+    fireEvent.click(screen.getByRole("button", { name: "WYSIWYG" }));
+    const wysiwygBuffer = await findBuffer();
+    expect(wysiwygBuffer.getAttribute("data-surface")).toBe("wysiwyg");
+    expect(wysiwygBuffer.value).toBe(edited);
+  });
+
+  it("applies an identical payload from either mode", async () => {
+    const edited = `${MD}\n\nSame payload.`;
+    for (const mode of ["wysiwyg", "source"] as const) {
+      sessionStorage.clear();
+      const calls = mockBackend(epub3Fixture(), { ch1: MD });
+      await openFixtureAndEdit(calls);
+      if (mode === "source") {
+        fireEvent.click(screen.getByRole("button", { name: "Markdown" }));
+      }
+      const buffer = await findBuffer();
+      expect(buffer.getAttribute("data-surface")).toBe(mode);
+      fireEvent.change(buffer, { target: { value: edited } });
+      fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+      await waitFor(() =>
+        expect(calls.some((c) => c.cmd === "write_chapter")).toBe(true),
+      );
+      const write = calls.find((c) => c.cmd === "write_chapter");
+      expect(write?.args.content).toEqual({
+        resource: "ch1",
+        format: "Markdown",
+        content: edited,
+      });
+      cleanup();
+      clearMocks();
+    }
+  });
+
+  it("persists the mode choice across editor sessions", async () => {
+    const calls = mockBackend(epub3Fixture(), { ch1: MD });
+    await openFixtureAndEdit(calls);
+    await findBuffer();
+    fireEvent.click(screen.getByRole("button", { name: "Markdown" }));
+    expect((await findBuffer()).getAttribute("data-surface")).toBe("source");
+
+    // Leave edit mode and come back: the choice sticks.
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() =>
+      expect(screen.queryByLabelText("chapter buffer")).toBeNull(),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    expect((await findBuffer()).getAttribute("data-surface")).toBe("source");
+  });
+
+  it("keeps the navigation guard working from WYSIWYG mode", async () => {
+    const calls = mockBackend(epub3Fixture(), { ch1: MD });
+    await openFixtureAndEdit(calls);
+
+    const buffer = await findBuffer();
+    expect(buffer.getAttribute("data-surface")).toBe("wysiwyg");
+    fireEvent.change(buffer, { target: { value: "changed in wysiwyg" } });
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Keep editing" }),
+    );
+    expect((await findBuffer()).value).toBe("changed in wysiwyg");
   });
 });
