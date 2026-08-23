@@ -9,6 +9,15 @@
     "dialog:allow-save",
     "dialog:allow-confirm",
     "dialog:allow-ask",
-    "core:window:allow-destroy"
+    "core:window:allow-destroy",
+    "updater:allow-check",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "https://github.com/SeanCassiere/epubzilla/releases/latest"
+        }
+      ]
+    }
   ]
 }

@@ -16,6 +16,8 @@ use tauri::{Emitter, Manager};
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // Native menu with accelerators (issue #74). Activations forward
         // the item id to the webview; lib/menu.ts routes them onto the
         // same action bus as the DOM keyboard shortcuts.
