@@ -23,6 +23,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -31,5 +32,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/SeanCassiere/epubzilla/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJDQjA4OTVBMzQzMTMxQzAKUldUQU1URTBXb213TEJkMlBmZENoUkx1RmJHak9KZnRPcnhibzVvZmlYMHdyM1h3aUYvZkVoaW8K"
+    }
   }
 }

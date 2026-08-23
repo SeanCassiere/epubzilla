@@ -77,6 +77,9 @@ shows how to re-enable them; CI still tests on Linux). Artifacts upload to a
 **draft** GitHub Release with notes generated from merged PRs since the
 previous tag. Review and publish the draft manually.
 
+The updater signing setup, artifact inspection checklist, canary, recovery,
+and key-rotation procedure are in [the release runbook](docs/releasing.md).
+
 Two ways to cut a release:
 
 1. **GitHub Actions (recommended)**: run the **Cut release** workflow

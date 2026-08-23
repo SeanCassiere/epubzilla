@@ -3,6 +3,7 @@ import { ReaderProvider, useReader } from "./state/reader";
 import { Header } from "./components/Header";
 import { ReaderPane } from "./components/ReaderPane";
 import { Sidebar } from "./components/Sidebar";
+import { UpdateNotice } from "./components/UpdateNotice";
 import { handleShortcutKeydown } from "./lib/shortcuts";
 import { bridgeMenuEvents } from "./lib/menu";
 import "./App.css";
@@ -38,6 +39,7 @@ function App() {
     <ReaderProvider>
       <div className="app-shell">
         <Header />
+        <UpdateNotice />
         <MainArea />
       </div>
     </ReaderProvider>
