@@ -17,13 +17,14 @@
 // parse/serialize (also pinned below), but rendered invisibly because
 // its relative src could not load.
 
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import type { MutableRefObject } from "react";
 import { createRef } from "react";
-import type { Editor } from "@milkdown/kit/core";
+import { editorViewCtx, type Editor } from "@milkdown/kit/core";
+import { Slice } from "@milkdown/kit/prose/model";
 import { getMarkdown } from "@milkdown/kit/utils";
-import { MilkdownEditor } from "../components/MilkdownEditor";
+import { MilkdownEditor, type PastedImage } from "../components/MilkdownEditor";
 
 beforeAll(() => {
   // jsdom lacks layout; ProseMirror needs these to mount.
@@ -47,6 +48,7 @@ async function mount(
     onChange?: (next: string) => void;
     insertImageRef?: MutableRefObject<((src: string) => void) | null>;
     resolveUrl?: (src: string) => string;
+    onPasteImage?: (image: PastedImage) => Promise<string | null>;
   } = {},
 ): Promise<{ editor: Editor; rerender: (v: string) => void }> {
   let editor: Editor | null = null;
@@ -54,6 +56,7 @@ async function mount(
     onChange: options.onChange ?? (() => undefined),
     insertImageRef: options.insertImageRef,
     resolveUrl: options.resolveUrl,
+    onPasteImage: options.onPasteImage,
     onReady: (e: Editor) => {
       editor = e;
     },
@@ -134,5 +137,160 @@ describe("editor image rendering (#52)", () => {
   it("renders the raw src when no resolver is provided", async () => {
     await mount("![](../images/x.png)\n", {});
     expect(hostImg()!.getAttribute("src")).toBe("../images/x.png");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #54: pasted/dropped images must persist as book resources, not as
+// transient blob/data URLs. The onPasteImage handler (EditorPane) persists
+// the bytes via add_resource_from_bytes and returns the zip-relative ref;
+// the editor intercepts the payload before ProseMirror's default handling
+// and inserts that ref — which then renders through the #52 resolver and
+// serializes relative, exactly like the toolbar insert.
+// ---------------------------------------------------------------------------
+
+const PNG_BYTES = [0x89, 0x50, 0x4e, 0x47, 1, 2, 3];
+
+function pngFile(name: string): File {
+  return new File([new Uint8Array(PNG_BYTES)], name, { type: "image/png" });
+}
+
+/** A paste event carrying a jsdom-safe DataTransfer stand-in. */
+function pasteEvent(data: { files?: File[]; text?: string }): Event {
+  const event = new Event("paste", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "clipboardData", {
+    value: {
+      files: data.files ?? [],
+      items: [],
+      types: data.text !== undefined ? ["text/plain"] : [],
+      getData: (type: string) =>
+        type === "text/plain" ? (data.text ?? "") : "",
+    },
+  });
+  return event;
+}
+
+const proseMirrorHost = (): HTMLElement =>
+  document.querySelector<HTMLElement>(".milkdown-host [contenteditable]")!;
+
+describe("pasted image persistence (#54)", () => {
+  it("routes a pasted image through the handler and inserts the returned relative ref", async () => {
+    const seen: PastedImage[] = [];
+    let latest = "";
+    await mount("Some text.\n", {
+      onChange: (next) => {
+        latest = next;
+      },
+      resolveUrl: resolve,
+      onPasteImage: (image) => {
+        seen.push(image);
+        return Promise.resolve("../images/pasted-image.png");
+      },
+    });
+
+    proseMirrorHost().dispatchEvent(
+      pasteEvent({ files: [pngFile("shot.png")] }),
+    );
+
+    await waitFor(() =>
+      expect(latest).toContain("![](../images/pasted-image.png)"),
+    );
+    // The handler received the actual clipboard payload.
+    expect(seen).toHaveLength(1);
+    expect(seen[0].name).toBe("shot.png");
+    expect(seen[0].type).toBe("image/png");
+    expect(Array.from(seen[0].bytes)).toEqual(PNG_BYTES);
+    // Nothing transient ever reaches the buffer.
+    expect(latest).not.toMatch(/blob:|data:|epub:\/\//);
+    // And the inserted ref renders resolved, like any other book image.
+    expect(hostImg()!.getAttribute("src")).toBe(
+      "epub://book-1/OEBPS/images/pasted-image.png",
+    );
+  });
+
+  it("lets non-image paste fall through to normal handling", async () => {
+    const onPasteImage = vi.fn<(image: PastedImage) => Promise<string | null>>(
+      () => Promise.resolve("../images/never.png"),
+    );
+    let latest = "Some text.\n";
+    const { editor } = await mount("Some text.\n", {
+      onChange: (next) => {
+        latest = next;
+      },
+      resolveUrl: resolve,
+      onPasteImage,
+    });
+
+    proseMirrorHost().dispatchEvent(pasteEvent({ text: "plain words" }));
+
+    // The default paste handling inserted the text; the image handler was
+    // never consulted.
+    await waitFor(() => expect(latest).toContain("plain words"));
+    expect(onPasteImage).not.toHaveBeenCalled();
+    expect(editor.action(getMarkdown())).not.toContain("![");
+  });
+
+  it("inserts nothing when persisting fails (handler resolves null)", async () => {
+    const onPasteImage = vi.fn<(image: PastedImage) => Promise<string | null>>(
+      () => Promise.resolve(null),
+    );
+    const { editor } = await mount("Some text.\n", {
+      resolveUrl: resolve,
+      onPasteImage,
+    });
+
+    proseMirrorHost().dispatchEvent(
+      pasteEvent({ files: [pngFile("bad.png")] }),
+    );
+
+    await waitFor(() => expect(onPasteImage).toHaveBeenCalledTimes(1));
+    expect(editor.action(getMarkdown())).not.toContain("![");
+  });
+
+  it("persists dropped image files through the same pipeline", async () => {
+    let latest = "";
+    const { editor } = await mount("Drop target.\n", {
+      onChange: (next) => {
+        latest = next;
+      },
+      resolveUrl: resolve,
+      onPasteImage: () => Promise.resolve("../images/dropped.png"),
+    });
+
+    // jsdom cannot deliver a real drag session; invoke the registered
+    // handleDrop prop the way ProseMirror would.
+    const view = editor.ctx.get(editorViewCtx);
+    const event = {
+      dataTransfer: { files: [pngFile("dropped.png")], items: [] },
+      clientX: 0,
+      clientY: 0,
+    } as unknown as DragEvent;
+    const handled = view.someProp("handleDrop", (f) =>
+      f(view, event, Slice.empty, false),
+    );
+    expect(handled).toBe(true);
+
+    await waitFor(() => expect(latest).toContain("![](../images/dropped.png)"));
+    expect(latest).not.toMatch(/blob:|data:|epub:\/\//);
+    expect(hostImg()!.getAttribute("src")).toBe(
+      "epub://book-1/OEBPS/images/dropped.png",
+    );
+  });
+
+  it("does not intercept image paste when no handler is wired", async () => {
+    let latest = "Some text.\n";
+    await mount("Some text.\n", {
+      onChange: (next) => {
+        latest = next;
+      },
+      resolveUrl: resolve,
+    });
+    proseMirrorHost().dispatchEvent(
+      pasteEvent({ files: [pngFile("shot.png")] }),
+    );
+    // Nothing crashes and nothing is inserted by OUR path (default
+    // handling owns the event as before the fix).
+    await new Promise((r) => setTimeout(r, 20));
+    expect(latest).not.toContain("pasted-image");
   });
 });

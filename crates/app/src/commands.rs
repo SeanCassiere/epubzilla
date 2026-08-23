@@ -146,6 +146,54 @@ pub(crate) fn add_resource_from_path_impl(
     lock(session)?.add_resource(book_id, hint, media_type, bytes)
 }
 
+/// Canonical file extension for a supported image media type. Inverse
+/// direction of `image_media_type` — pasted images (issue #54) arrive as
+/// bytes plus the clipboard's media type, with no OS path to infer from.
+fn image_extension(media_type: &str) -> Option<&'static str> {
+    match media_type {
+        "image/png" => Some("png"),
+        "image/jpeg" => Some("jpg"),
+        "image/gif" => Some("gif"),
+        "image/svg+xml" => Some("svg"),
+        "image/webp" => Some("webp"),
+        _ => None,
+    }
+}
+
+/// Issue #54: store image bytes (clipboard paste / drag-and-drop in the
+/// editor) in the book via `Session::add_resource`. The stored path derives
+/// from `name_hint`, but clipboard names are unreliable ("image.png",
+/// sometimes empty), so the hint's extension is kept only when it agrees
+/// with `media_type`; otherwise the canonical extension for the media type
+/// is applied. Non-image media types are `UnsupportedFeature`.
+pub(crate) fn add_resource_from_bytes_impl(
+    session: &SharedSession,
+    book_id: &str,
+    name_hint: &str,
+    media_type: &str,
+    bytes: Vec<u8>,
+) -> CoreResult<Book> {
+    let extension = image_extension(media_type).ok_or_else(|| CoreError::UnsupportedFeature {
+        message: format!(
+            "add_resource_from_bytes: {media_type:?} is not a supported image \
+             media type (image/png, image/jpeg, image/gif, image/svg+xml, image/webp)"
+        ),
+    })?;
+    let hint_path = std::path::Path::new(name_hint);
+    let hinted = image_media_type(hint_path.extension().and_then(|e| e.to_str()));
+    let hint = if hinted == Some(media_type) {
+        name_hint.to_owned()
+    } else {
+        let stem = hint_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("pasted-image");
+        format!("{stem}.{extension}")
+    };
+    lock(session)?.add_resource(book_id, &hint, media_type, bytes)
+}
+
 pub(crate) fn validate_impl(
     session: &SharedSession,
     book_id: &str,
@@ -266,6 +314,17 @@ pub async fn add_resource_from_path(
     os_path: String,
 ) -> CoreResult<Book> {
     add_resource_from_path_impl(&session, &book_id, &os_path)
+}
+
+#[tauri::command]
+pub async fn add_resource_from_bytes(
+    session: tauri::State<'_, SharedSession>,
+    book_id: String,
+    name_hint: String,
+    media_type: String,
+    bytes: Vec<u8>,
+) -> CoreResult<Book> {
+    add_resource_from_bytes_impl(&session, &book_id, &name_hint, &media_type, bytes)
 }
 
 #[tauri::command]
@@ -490,6 +549,89 @@ mod tests {
         assert!(matches!(err, CoreError::UnsupportedFeature { .. }));
         let err = add_resource_from_path_impl(&session, &book.id, "/no/such/file.png").unwrap_err();
         assert!(matches!(err, CoreError::Io { .. }));
+    }
+
+    #[test]
+    fn add_resource_from_bytes_stores_the_image() {
+        let session: SharedSession = Mutex::new(Session::new());
+        let book = create_book_impl(&session, metadata("Pästed Bòok ✓")).unwrap();
+        let bytes: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 9, 8, 7];
+        let book = add_resource_from_bytes_impl(
+            &session,
+            &book.id,
+            "Pästed Ïmage.PNG",
+            "image/png",
+            bytes.clone(),
+        )
+        .unwrap();
+
+        assert!(book.dirty);
+        let added = book
+            .resources
+            .iter()
+            .find(|r| r.path == "OEBPS/images/Pästed-Ïmage.png")
+            .unwrap();
+        assert_eq!(added.media_type, "image/png");
+        assert_eq!(added.size, bytes.len() as u64);
+        assert_eq!(
+            read_resource_impl(&session, &book.id, &added.id).unwrap(),
+            bytes
+        );
+    }
+
+    #[test]
+    fn add_resource_from_bytes_normalizes_unreliable_clipboard_names() {
+        let session: SharedSession = Mutex::new(Session::new());
+        let book = create_book_impl(&session, metadata("Clïpboard Names")).unwrap();
+
+        // No extension: the media type's canonical extension is applied.
+        let book =
+            add_resource_from_bytes_impl(&session, &book.id, "clipboard", "image/jpeg", vec![1])
+                .unwrap();
+        assert!(book
+            .resources
+            .iter()
+            .any(|r| r.path.ends_with("/clipboard.jpg")));
+
+        // Wrong extension for the media type: replaced, not trusted.
+        let book =
+            add_resource_from_bytes_impl(&session, &book.id, "shot.png", "image/webp", vec![2])
+                .unwrap();
+        assert!(book
+            .resources
+            .iter()
+            .any(|r| r.path.ends_with("/shot.webp")));
+
+        // Matching extension is kept (jpeg spelling included).
+        let book =
+            add_resource_from_bytes_impl(&session, &book.id, "photo.jpeg", "image/jpeg", vec![3])
+                .unwrap();
+        assert!(book
+            .resources
+            .iter()
+            .any(|r| r.path.ends_with("/photo.jpeg")));
+
+        // Empty name still lands somewhere sensible.
+        let book =
+            add_resource_from_bytes_impl(&session, &book.id, "", "image/png", vec![4]).unwrap();
+        assert!(book
+            .resources
+            .iter()
+            .any(|r| r.path.ends_with("/pasted-image.png")));
+    }
+
+    #[test]
+    fn add_resource_from_bytes_rejects_non_image_media_types() {
+        let session: SharedSession = Mutex::new(Session::new());
+        let book = create_book_impl(&session, metadata("Bäd Paste")).unwrap();
+        for media_type in ["video/mp4", "image/tiff", "text/html", ""] {
+            let err = add_resource_from_bytes_impl(&session, &book.id, "x", media_type, vec![1])
+                .unwrap_err();
+            assert!(
+                matches!(err, CoreError::UnsupportedFeature { .. }),
+                "{media_type} should be rejected"
+            );
+        }
     }
 
     /// The IPC error contract: command failures serialize as the serde form

@@ -42,6 +42,7 @@ frontend never computes model changes itself.
 | `remove_chapter` | `book_id, spine_item_id` | `Book` | Removes spine entry, nav entries, and the resource if unreferenced. |
 | `reorder_spine` | `book_id, order: Vec<SpineItemId>` | `Book` | Must be a permutation of the current spine; nav order follows for top-level chapter entries. |
 | `add_resource_from_path` | `book_id, os_path: String` | `Book` | M3.3: reads the file at `os_path` and stores it via `Session::add_resource` — bytes never cross IPC. Media type is inferred from the extension (`png`, `jpg`, `jpeg`, `gif`, `svg`, `webp`); anything else is `UnsupportedFeature`. |
+| `add_resource_from_bytes` | `book_id, name_hint: String, media_type: String, bytes: Vec<u8>` | `Book` | Issue #54: stores in-memory image bytes (clipboard paste / drag-and-drop, no OS path) via `Session::add_resource`. `media_type` must be one of `image/png`, `image/jpeg`, `image/gif`, `image/svg+xml`, `image/webp` — anything else is `UnsupportedFeature`. `name_hint`'s extension is kept only when it agrees with `media_type`; otherwise the canonical extension is applied (empty hints become `pasted-image.<ext>`). |
 
 `Session::add_resource(book_id, path_hint: &str, media_type: &str, bytes:
 Vec<u8>) -> CoreResult<Book>` is the core-level primitive behind
