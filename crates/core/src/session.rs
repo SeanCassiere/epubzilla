@@ -505,6 +505,69 @@ impl Session {
         Ok(open.book.clone())
     }
 
+    /// Set, replace, or clear the book's cover image (issue #73).
+    ///
+    /// `resource_id: Some` must name a manifest resource with an `image/*`
+    /// media type — the resource becomes `metadata.cover_resource` and the
+    /// regenerated OPF gives its manifest item the EPUB 3 `cover-image`
+    /// property (`writer::write_opf`). `None` clears the cover.
+    ///
+    /// Replacement cleanup: when the displaced cover was added THIS session
+    /// (`add_resource`) and nothing else references it, it is removed
+    /// eagerly — manifest entry, overlay bytes, and zip entry — so repeated
+    /// cover swaps cannot grow the file (the #53 invariant). The reference
+    /// check reuses the incremental sweep's bookkeeping (#62) and reads no
+    /// unmodified documents. Pre-existing covers are conservatively kept in
+    /// the manifest (same policy as `sweep_orphans`); they only lose the
+    /// `cover-image` property.
+    pub fn set_cover(&mut self, book_id: &str, resource_id: Option<&str>) -> CoreResult<Book> {
+        let open = self.open_mut(book_id)?;
+        ensure_editable(&open.book)?;
+        if let Some(id) = resource_id {
+            let resource = find_resource(&open.book, id)?;
+            if !resource.media_type.starts_with("image/") {
+                return Err(CoreError::UnsupportedFeature {
+                    message: format!(
+                        "set_cover: resource {id:?} is {:?}, not an image",
+                        resource.media_type
+                    ),
+                });
+            }
+        }
+        let displaced = open
+            .book
+            .metadata
+            .cover_resource
+            .take()
+            .filter(|old| Some(old.as_str()) != resource_id);
+        open.book.metadata.cover_resource = resource_id.map(str::to_owned);
+
+        // Eagerly GC a displaced session-added cover nothing references.
+        if let Some(old_id) = displaced {
+            let old = open
+                .book
+                .resources
+                .iter()
+                .find(|r| r.id == old_id)
+                .map(|r| (r.path.clone(), r.media_type.starts_with("image/")));
+            if let Some((old_path, is_image)) = old {
+                if is_image
+                    && open.added_resources.contains(&old_id)
+                    && !session_referenced_paths(open).contains(&old_path)
+                {
+                    open.added_resources.remove(&old_id);
+                    open.book.resources.retain(|r| r.id != old_id);
+                    open.overlay.remove(&old_path);
+                    if open.container.is_some() {
+                        open.removed.insert(old_path);
+                    }
+                }
+            }
+        }
+        open.book.dirty = true;
+        Ok(open.book.clone())
+    }
+
     /// Replace the book's metadata. Regenerates the generated title page (and
     /// its nav label) for books born from `create_book`.
     pub fn update_metadata(&mut self, book_id: &str, metadata: Metadata) -> CoreResult<Book> {
@@ -904,6 +967,36 @@ fn sweep_orphans(open: &mut OpenBook) {
     protected.extend(open.book.metadata.cover_resource.iter().cloned());
 
     // Everything the modified documents currently reference.
+    let referenced = session_referenced_paths(open);
+
+    let orphans: Vec<(String, String)> = open
+        .book
+        .resources
+        .iter()
+        .filter(|r| {
+            open.added_resources.contains(&r.id)
+                && !protected.contains(&r.id)
+                && !referenced.contains(&r.path)
+        })
+        .map(|r| (r.id.clone(), r.path.clone()))
+        .collect();
+    for (id, path) in orphans {
+        open.added_resources.remove(&id);
+        open.book.resources.retain(|r| r.id != id);
+        open.overlay.remove(&path);
+        if open.container.is_some() {
+            open.removed.insert(path);
+        }
+    }
+}
+
+/// Every zip path the session's modifications currently reference: the union
+/// of the modified documents' reference sets (`modified_doc_refs`), extended
+/// transitively through the `url(...)` chains of ADDED CSS resources (whose
+/// bytes sit in the overlay and are cheap to parse). Reads no unmodified
+/// documents (#62). Shared by `sweep_orphans` and `set_cover`'s replacement
+/// cleanup.
+fn session_referenced_paths(open: &mut OpenBook) -> HashSet<String> {
     let mut referenced: HashSet<String> =
         open.modified_doc_refs.values().flatten().cloned().collect();
 
@@ -932,26 +1025,7 @@ fn sweep_orphans(open: &mut OpenBook) {
             break;
         }
     }
-
-    let orphans: Vec<(String, String)> = open
-        .book
-        .resources
-        .iter()
-        .filter(|r| {
-            open.added_resources.contains(&r.id)
-                && !protected.contains(&r.id)
-                && !referenced.contains(&r.path)
-        })
-        .map(|r| (r.id.clone(), r.path.clone()))
-        .collect();
-    for (id, path) in orphans {
-        open.added_resources.remove(&id);
-        open.book.resources.retain(|r| r.id != id);
-        open.overlay.remove(&path);
-        if open.container.is_some() {
-            open.removed.insert(path);
-        }
-    }
+    referenced
 }
 
 /// Assemble the EPUB zip at `temp_path`: stored mimetype first, regenerated
@@ -2562,6 +2636,233 @@ mod tests {
             reopened.metadata.cover_resource.as_deref(),
             Some("cover-img")
         );
+    }
+
+    /// The package document text of a saved .epub.
+    fn opf_text(path: &std::path::Path) -> String {
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+        let mut entry = archive.by_name("OEBPS/content.opf").unwrap();
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut entry, &mut text).unwrap();
+        text
+    }
+
+    #[test]
+    fn set_cover_marks_manifest_item_and_round_trips() {
+        let mut session = Session::new();
+        let book = session.create_book(sample_metadata());
+        let book = session
+            .add_resource(&book.id, "cover.png", "image/png", PNG_1X1.to_vec())
+            .unwrap();
+        let cover_id = book
+            .resources
+            .iter()
+            .find(|r| r.path == "OEBPS/images/cover.png")
+            .map(|r| r.id.clone())
+            .unwrap();
+
+        let book = session.set_cover(&book.id, Some(&cover_id)).unwrap();
+        assert!(book.dirty);
+        assert_eq!(book.metadata.cover_resource.as_deref(), Some("cover"));
+
+        let path = temp_path("set-cover.epub");
+        session
+            .save_book(&book.id, Some(path.to_string_lossy().into_owned()))
+            .unwrap();
+        let opf = opf_text(&path);
+        assert!(
+            opf.contains(r#"properties="cover-image""#),
+            "OPF missing cover-image property: {opf}"
+        );
+
+        // Round-trip: reopening sees the same cover, and the book validates.
+        let reopened = session.open_book(&path).unwrap();
+        assert_eq!(reopened.metadata.cover_resource.as_deref(), Some("cover"));
+        assert!(session.validate(&reopened.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn replacing_session_added_cover_cleans_up_the_old_one() {
+        let mut session = Session::new();
+        let book = session.create_book(sample_metadata());
+        session
+            .add_resource(&book.id, "first.png", "image/png", PNG_1X1.to_vec())
+            .unwrap();
+        session.set_cover(&book.id, Some("first")).unwrap();
+        session
+            .add_resource(&book.id, "second.png", "image/png", PNG_1X1.to_vec())
+            .unwrap();
+        let book = session.set_cover(&book.id, Some("second")).unwrap();
+
+        // The displaced session-added cover is removed eagerly: manifest
+        // entry and bytes are gone before any save.
+        assert!(!book.resources.iter().any(|r| r.id == "first"));
+        assert_eq!(book.metadata.cover_resource.as_deref(), Some("second"));
+
+        let path = temp_path("replace-cover.epub");
+        let saved = session
+            .save_book(&book.id, Some(path.to_string_lossy().into_owned()))
+            .unwrap();
+        assert!(!saved.resources.iter().any(|r| r.id == "first"));
+        let names = zip_names(&path);
+        assert!(!names.iter().any(|n| n == "OEBPS/images/first.png"));
+        assert!(names.iter().any(|n| n == "OEBPS/images/second.png"));
+        let opf = opf_text(&path);
+        assert_eq!(opf.matches("cover-image").count(), 1);
+
+        let reopened = session.open_book(&path).unwrap();
+        assert_eq!(reopened.metadata.cover_resource.as_deref(), Some("second"));
+    }
+
+    #[test]
+    fn replacing_cover_keeps_old_one_referenced_by_content() {
+        // The displaced cover is also used inside a chapter edited this
+        // session: it must survive the replacement cleanup and the save sweep.
+        let mut session = Session::new();
+        let book = session.create_book(sample_metadata());
+        session
+            .add_resource(&book.id, "both.png", "image/png", PNG_1X1.to_vec())
+            .unwrap();
+        session.set_cover(&book.id, Some("both")).unwrap();
+        session
+            .write_chapter(
+                &book.id,
+                "titlepage",
+                md_chapter("titlepage", "# T\n\n![still used](images/both.png)\n"),
+            )
+            .unwrap();
+        session
+            .add_resource(&book.id, "new-cover.png", "image/png", PNG_1X1.to_vec())
+            .unwrap();
+        let book = session.set_cover(&book.id, Some("new-cover")).unwrap();
+        assert!(book.resources.iter().any(|r| r.id == "both"));
+
+        let path = temp_path("replace-cover-referenced.epub");
+        let saved = session
+            .save_book(&book.id, Some(path.to_string_lossy().into_owned()))
+            .unwrap();
+        assert!(saved.resources.iter().any(|r| r.id == "both"));
+        assert!(zip_names(&path)
+            .iter()
+            .any(|n| n == "OEBPS/images/both.png"));
+    }
+
+    #[test]
+    fn replacing_preexisting_cover_keeps_the_old_resource() {
+        // Conservative keep (same policy as the sweep): a pre-existing cover
+        // only loses the cover-image property, never its manifest entry.
+        let opf = r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">urn:uuid:replace-preexisting-cover</dc:identifier>
+    <dc:title>Cover Swap</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="old-cover" href="cover.png" media-type="image/png" properties="cover-image"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#;
+        let nav = r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<body><nav epub:type="toc"><ol><li><a href="ch1.xhtml">One</a></li></ol></nav></body></html>"#;
+        let entries = vec![
+            ("mimetype", "application/epub+zip"),
+            ("META-INF/container.xml", CONTAINER_XML),
+            ("OEBPS/content.opf", opf),
+            ("OEBPS/nav.xhtml", nav),
+            ("OEBPS/ch1.xhtml", CH2),
+            ("OEBPS/cover.png", "old-cover-bytes"),
+        ];
+        let source = write_epub("replace-preexisting-cover.epub", &entries);
+        let mut session = Session::new();
+        let book = session.open_book(&source).unwrap();
+        assert_eq!(book.metadata.cover_resource.as_deref(), Some("old-cover"));
+
+        session
+            .add_resource(&book.id, "fresh.png", "image/png", PNG_1X1.to_vec())
+            .unwrap();
+        let book = session.set_cover(&book.id, Some("fresh")).unwrap();
+        assert!(book.resources.iter().any(|r| r.id == "old-cover"));
+
+        let target = temp_path("replace-preexisting-cover-dst.epub");
+        let saved = session
+            .save_book(&book.id, Some(target.to_string_lossy().into_owned()))
+            .unwrap();
+        assert!(saved.resources.iter().any(|r| r.id == "old-cover"));
+        let opf = opf_text(&target);
+        assert_eq!(opf.matches("cover-image").count(), 1);
+        assert!(opf.contains(r#"id="fresh""#));
+
+        let reopened = session.open_book(&target).unwrap();
+        assert_eq!(reopened.metadata.cover_resource.as_deref(), Some("fresh"));
+    }
+
+    #[test]
+    fn clearing_cover_sweeps_session_added_image() {
+        let mut session = Session::new();
+        let book = session.create_book(sample_metadata());
+        session
+            .add_resource(&book.id, "cover.png", "image/png", PNG_1X1.to_vec())
+            .unwrap();
+        session.set_cover(&book.id, Some("cover")).unwrap();
+        let book = session.set_cover(&book.id, None).unwrap();
+        assert_eq!(book.metadata.cover_resource, None);
+        // Clearing displaced the added cover: cleaned up eagerly.
+        assert!(!book.resources.iter().any(|r| r.id == "cover"));
+
+        let path = temp_path("clear-cover.epub");
+        session
+            .save_book(&book.id, Some(path.to_string_lossy().into_owned()))
+            .unwrap();
+        assert!(!zip_names(&path)
+            .iter()
+            .any(|n| n == "OEBPS/images/cover.png"));
+        assert!(!opf_text(&path).contains("cover-image"));
+    }
+
+    #[test]
+    fn set_cover_rejects_non_images_unknown_ids_and_epub2() {
+        let mut session = Session::new();
+        let book = session.create_book(sample_metadata());
+        let err = session.set_cover(&book.id, Some("titlepage")).unwrap_err();
+        assert!(matches!(err, CoreError::UnsupportedFeature { .. }));
+        let err = session.set_cover(&book.id, Some("nope")).unwrap_err();
+        assert!(matches!(err, CoreError::ResourceNotFound { .. }));
+        // A rejected set leaves the model untouched.
+        assert_eq!(
+            session.get_book(&book.id).unwrap().metadata.cover_resource,
+            None
+        );
+
+        let entries = vec![
+            ("mimetype", "application/epub+zip"),
+            ("META-INF/container.xml", CONTAINER_XML),
+            ("OEBPS/content.opf", EPUB2_OPF),
+            ("OEBPS/toc.ncx", NCX),
+            ("OEBPS/ch1.xhtml", CH1),
+        ];
+        let path = write_epub("set-cover-epub2.epub", &entries);
+        let book = session.open_book(&path).unwrap();
+        let err = session.set_cover(&book.id, None).unwrap_err();
+        assert!(matches!(err, CoreError::UnsupportedFeature { .. }));
+    }
+
+    #[test]
+    fn set_cover_is_idempotent_for_the_same_resource() {
+        let mut session = Session::new();
+        let book = session.create_book(sample_metadata());
+        session
+            .add_resource(&book.id, "cover.png", "image/png", PNG_1X1.to_vec())
+            .unwrap();
+        session.set_cover(&book.id, Some("cover")).unwrap();
+        // Setting the same cover again must NOT treat it as displaced.
+        let book = session.set_cover(&book.id, Some("cover")).unwrap();
+        assert_eq!(book.metadata.cover_resource.as_deref(), Some("cover"));
+        assert!(book.resources.iter().any(|r| r.id == "cover"));
     }
 
     #[test]

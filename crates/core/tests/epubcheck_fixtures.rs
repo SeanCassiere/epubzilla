@@ -108,6 +108,29 @@ fn generate_epubcheck_fixtures() {
             )
             .unwrap();
     }
+    // Issue #73: cover set + replace. The first cover is displaced by the
+    // second, so the saved fixture must carry exactly one manifest item with
+    // the cover-image property and no orphaned first cover — epubcheck
+    // validates the property placement in CI.
+    let book = session
+        .add_resource(&book_id, "draft-cover.png", "image/png", PNG_1X1.to_vec())
+        .unwrap();
+    let draft_cover = book.resources.last().unwrap().id.clone();
+    session.set_cover(&book_id, Some(&draft_cover)).unwrap();
+    let book = session
+        .add_resource(&book_id, "final-cover.png", "image/png", PNG_1X1.to_vec())
+        .unwrap();
+    let final_cover = book.resources.last().unwrap().id.clone();
+    let book = session.set_cover(&book_id, Some(&final_cover)).unwrap();
+    assert_eq!(
+        book.metadata.cover_resource.as_deref(),
+        Some(final_cover.as_str())
+    );
+    assert!(
+        !book.resources.iter().any(|r| r.id == draft_cover),
+        "replaced session-added cover must be cleaned up"
+    );
+
     let book = session.get_book(&book_id).unwrap();
     let order: Vec<SpineItemId> = vec![
         book.spine[0].id.clone(),
@@ -224,6 +247,12 @@ fn generate_epubcheck_fixtures() {
     session.open_book(&resaved).unwrap();
     let reopened = session.open_book(&mutated).unwrap();
     assert!(session.validate(&reopened.id).unwrap().is_empty());
+    // The cover survives the round trip via the cover-image property (#73).
+    assert!(reopened.metadata.cover_resource.is_some());
+    assert!(!reopened
+        .resources
+        .iter()
+        .any(|r| r.path.ends_with("draft-cover.png")));
 }
 
 /// Hand-build a valid EPUB 3 whose nav document ships landmarks and

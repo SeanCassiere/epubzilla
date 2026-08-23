@@ -194,6 +194,60 @@ pub(crate) fn add_resource_from_bytes_impl(
     lock(session)?.add_resource(book_id, &hint, media_type, bytes)
 }
 
+/// Issue #73: set, replace, or clear the book's cover image. `resource_id:
+/// Some` must name an existing `image/*` manifest resource; `None` clears
+/// the cover. The manifest item gets the EPUB 3 `cover-image` property on
+/// save; a replaced session-added cover is cleaned up by the core.
+pub(crate) fn set_cover_impl(
+    session: &SharedSession,
+    book_id: &str,
+    resource_id: Option<&str>,
+) -> CoreResult<Book> {
+    lock(session)?.set_cover(book_id, resource_id)
+}
+
+/// Issue #73: read one image file from an OS path, store it via
+/// `Session::add_resource` (same slot rules as `add_resource_from_path`),
+/// and make it the cover in the same session lock.
+pub(crate) fn set_cover_from_path_impl(
+    session: &SharedSession,
+    book_id: &str,
+    os_path: &str,
+) -> CoreResult<Book> {
+    let path = std::path::Path::new(os_path);
+    let media_type =
+        image_media_type(path.extension().and_then(|e| e.to_str())).ok_or_else(|| {
+            CoreError::UnsupportedFeature {
+                message: format!(
+                    "set_cover_from_path: {os_path:?} is not a supported image \
+                 (png, jpg, jpeg, gif, svg, webp)"
+                ),
+            }
+        })?;
+    let bytes = std::fs::read(path).map_err(|e| CoreError::Io {
+        message: format!("set_cover_from_path: cannot read {os_path}: {e}"),
+    })?;
+    let hint = path.file_name().and_then(|n| n.to_str()).unwrap_or("cover");
+
+    let mut guard = lock(session)?;
+    let known: std::collections::HashSet<String> = guard
+        .get_book(book_id)?
+        .resources
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    let book = guard.add_resource(book_id, hint, media_type, bytes)?;
+    let new_id = book
+        .resources
+        .iter()
+        .find(|r| !known.contains(&r.id))
+        .map(|r| r.id.clone())
+        .ok_or_else(|| CoreError::Io {
+            message: "set_cover_from_path: added resource not found in manifest".into(),
+        })?;
+    guard.set_cover(book_id, Some(&new_id))
+}
+
 pub(crate) fn validate_impl(
     session: &SharedSession,
     book_id: &str,
@@ -325,6 +379,24 @@ pub async fn add_resource_from_bytes(
     bytes: Vec<u8>,
 ) -> CoreResult<Book> {
     add_resource_from_bytes_impl(&session, &book_id, &name_hint, &media_type, bytes)
+}
+
+#[tauri::command]
+pub async fn set_cover(
+    session: tauri::State<'_, SharedSession>,
+    book_id: String,
+    resource_id: Option<String>,
+) -> CoreResult<Book> {
+    set_cover_impl(&session, &book_id, resource_id.as_deref())
+}
+
+#[tauri::command]
+pub async fn set_cover_from_path(
+    session: tauri::State<'_, SharedSession>,
+    book_id: String,
+    os_path: String,
+) -> CoreResult<Book> {
+    set_cover_from_path_impl(&session, &book_id, &os_path)
 }
 
 #[tauri::command]
@@ -632,6 +704,76 @@ mod tests {
                 "{media_type} should be rejected"
             );
         }
+    }
+
+    #[test]
+    fn set_cover_from_path_adds_the_image_and_sets_it_as_cover() {
+        let dir = std::env::temp_dir().join(format!("epubzilla-app-cover-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("Mÿ Cövèr.PNG");
+        let bytes: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 5, 6, 7];
+        std::fs::write(&img, &bytes).unwrap();
+
+        let session: SharedSession = Mutex::new(Session::new());
+        let book = create_book_impl(&session, metadata("Cövered Bòok ✓")).unwrap();
+        let book = set_cover_from_path_impl(&session, &book.id, img.to_str().unwrap()).unwrap();
+
+        assert!(book.dirty);
+        let cover_id = book.metadata.cover_resource.as_deref().unwrap();
+        let cover = book.resources.iter().find(|r| r.id == cover_id).unwrap();
+        assert_eq!(cover.path, "OEBPS/images/Mÿ-Cövèr.png");
+        assert_eq!(cover.media_type, "image/png");
+        assert_eq!(
+            read_resource_impl(&session, &book.id, cover_id).unwrap(),
+            bytes
+        );
+
+        // Replace via a second pick: the first cover is cleaned up.
+        let img2 = dir.join("replacement.jpg");
+        std::fs::write(&img2, [1u8, 2, 3]).unwrap();
+        let book = set_cover_from_path_impl(&session, &book.id, img2.to_str().unwrap()).unwrap();
+        assert_ne!(book.metadata.cover_resource.as_deref(), Some(cover_id));
+        assert!(!book.resources.iter().any(|r| r.id == cover_id));
+    }
+
+    #[test]
+    fn set_cover_from_path_rejects_unsupported_and_missing_files() {
+        let session: SharedSession = Mutex::new(Session::new());
+        let book = create_book_impl(&session, metadata("Cöver Errs")).unwrap();
+        let err = set_cover_from_path_impl(&session, &book.id, "/pics/movie.mp4").unwrap_err();
+        assert!(matches!(err, CoreError::UnsupportedFeature { .. }));
+        let err = set_cover_from_path_impl(&session, &book.id, "/no/such/file.png").unwrap_err();
+        assert!(matches!(err, CoreError::Io { .. }));
+    }
+
+    #[test]
+    fn set_cover_impl_sets_and_clears_from_existing_resource() {
+        let dir = std::env::temp_dir().join(format!("epubzilla-app-cover2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("existing.png");
+        std::fs::write(&img, [9u8, 9]).unwrap();
+
+        let session: SharedSession = Mutex::new(Session::new());
+        let book = create_book_impl(&session, metadata("Rëuse Bòok")).unwrap();
+        let book = add_resource_from_path_impl(&session, &book.id, img.to_str().unwrap()).unwrap();
+        let image_id = book
+            .resources
+            .iter()
+            .find(|r| r.media_type == "image/png")
+            .map(|r| r.id.clone())
+            .unwrap();
+
+        let book = set_cover_impl(&session, &book.id, Some(&image_id)).unwrap();
+        assert_eq!(
+            book.metadata.cover_resource.as_deref(),
+            Some(image_id.as_str())
+        );
+
+        let book = set_cover_impl(&session, &book.id, None).unwrap();
+        assert_eq!(book.metadata.cover_resource, None);
+
+        let err = set_cover_impl(&session, &book.id, Some("titlepage")).unwrap_err();
+        assert!(matches!(err, CoreError::UnsupportedFeature { .. }));
     }
 
     /// The IPC error contract: command failures serialize as the serde form

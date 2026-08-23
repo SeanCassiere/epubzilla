@@ -160,6 +160,31 @@ export function addResourceFromBytes(
   });
 }
 
+/**
+ * Set, replace, or clear the book's cover image (issue #73). `resourceId`
+ * must name an existing `image/*` manifest resource; null clears the cover.
+ * The manifest item gets the EPUB 3 `cover-image` property on save; a
+ * replaced session-added cover is cleaned up by the core.
+ */
+export function setCover(
+  bookId: string,
+  resourceId: string | null,
+): Promise<Book> {
+  return invoke<Book>("set_cover", { bookId, resourceId });
+}
+
+/**
+ * Read an image file from an OS path, add it to the book, and make it the
+ * cover in one command (issue #73) — bytes never cross IPC. Media type is
+ * inferred from the extension like `add_resource_from_path`.
+ */
+export function setCoverFromPath(
+  bookId: string,
+  osPath: string,
+): Promise<Book> {
+  return invoke<Book>("set_cover_from_path", { bookId, osPath });
+}
+
 /** Native validation subset (ADR-0003). Findings are values, not rejections. */
 export function validateBook(bookId: string): Promise<ValidationIssue[]> {
   return invoke<ValidationIssue[]>("validate", { bookId });
