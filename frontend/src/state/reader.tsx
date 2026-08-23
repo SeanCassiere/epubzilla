@@ -44,6 +44,21 @@ interface ReaderState {
    * (position and current chapter are kept — only the model changed).
    */
   updateMetadata: (metadata: Metadata) => Promise<boolean>;
+  /**
+   * add_chapter after the CURRENT spine item (or at the end when nothing
+   * is current); adopts the returned Book and navigates to the new chapter.
+   */
+  addChapter: (title: string) => Promise<boolean>;
+  /**
+   * remove_chapter; adopts the returned Book. If the removed chapter was
+   * current, navigates to the nearest linear neighbor.
+   */
+  removeChapter: (spineItemId: string) => Promise<boolean>;
+  /**
+   * reorder_spine with the full permutation where the item swapped one
+   * slot in `direction`; adopts the returned Book, current chapter kept.
+   */
+  moveSpineItem: (spineItemId: string, direction: 1 | -1) => Promise<boolean>;
   goTo: (spineIndex: number) => Promise<void>;
   /** Navigate by zip-internal resource path (TOC entries, chapter links). */
   goToResource: (path: string, fragment: string | null) => Promise<void>;
@@ -158,6 +173,99 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
     [book],
   );
 
+  /**
+   * Shared spine-mutation path (M2.3): run an editing command, adopt the
+   * returned Book as the truth (no optimistic updates), and keep the
+   * current chapter when it survived — only its index may have shifted,
+   * the loaded content is unchanged. Returns the updated Book, or null
+   * on failure (the CoreError is stored for the header to render).
+   */
+  const applyEdit = useCallback(
+    async (mutate: () => Promise<Book>): Promise<Book | null> => {
+      if (book === null) return null;
+      const currentId = book.spine[spineIndex]?.id ?? null;
+      setError(null);
+      try {
+        const updated = await mutate();
+        setBook(updated);
+        if (currentId !== null) {
+          const kept = updated.spine.findIndex((s) => s.id === currentId);
+          if (kept !== -1) setSpineIndex(kept);
+        }
+        return updated;
+      } catch (err) {
+        setError(err);
+        return null;
+      }
+    },
+    [book, spineIndex],
+  );
+
+  const addChapter = useCallback(
+    async (title: string): Promise<boolean> => {
+      if (book === null) return false;
+      const after = book.spine[spineIndex]?.id;
+      const known = new Set(book.spine.map((s) => s.id));
+      const updated = await applyEdit(() =>
+        api.addChapter(book.id, title, after),
+      );
+      if (updated === null) return false;
+      // The one spine id we didn't know before is the new chapter.
+      const created = updated.spine.findIndex((s) => !known.has(s.id));
+      if (created !== -1) await loadChapter(updated, created);
+      return true;
+    },
+    [book, spineIndex, applyEdit, loadChapter],
+  );
+
+  const removeChapter = useCallback(
+    async (spineItemId: string): Promise<boolean> => {
+      if (book === null) return false;
+      const removedIndex = book.spine.findIndex((s) => s.id === spineItemId);
+      if (removedIndex === -1) return false;
+      const wasCurrent = removedIndex === spineIndex;
+      const updated = await applyEdit(() =>
+        api.removeChapter(book.id, spineItemId),
+      );
+      if (updated === null) return false;
+      if (wasCurrent) {
+        // Sensible neighbor: the first linear chapter at or after the
+        // removed slot, else the nearest linear one before it.
+        const at = Math.min(removedIndex, updated.spine.length - 1);
+        const forward = at < 0 ? -1 : findLinear(updated, at, 1);
+        const fallback =
+          forward !== -1 ? forward : at < 0 ? -1 : findLinear(updated, at, -1);
+        if (fallback === -1) {
+          setChapter(null);
+          setSpineIndex(-1);
+        } else {
+          await loadChapter(updated, fallback);
+        }
+      }
+      return true;
+    },
+    [book, spineIndex, applyEdit, loadChapter],
+  );
+
+  const moveSpineItem = useCallback(
+    async (spineItemId: string, direction: 1 | -1): Promise<boolean> => {
+      if (book === null) return false;
+      const from = book.spine.findIndex((s) => s.id === spineItemId);
+      if (from === -1) return false;
+      const to = from + direction;
+      if (to < 0 || to >= book.spine.length) return false;
+      // Full permutation with the two neighbors swapped — the core owns
+      // the ordering rules; the UI only describes the desired order.
+      const order = book.spine.map((s) => s.id);
+      [order[from], order[to]] = [order[to], order[from]];
+      const updated = await applyEdit(() =>
+        api.reorderSpine(book.id, order),
+      );
+      return updated !== null;
+    },
+    [book, applyEdit],
+  );
+
   const goTo = useCallback(
     async (index: number) => {
       if (book === null || index < 0 || index >= book.spine.length) return;
@@ -206,6 +314,9 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       openBook,
       createBook,
       updateMetadata,
+      addChapter,
+      removeChapter,
+      moveSpineItem,
       goTo,
       goToResource,
       nextChapter,
@@ -221,6 +332,9 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       openBook,
       createBook,
       updateMetadata,
+      addChapter,
+      removeChapter,
+      moveSpineItem,
       goTo,
       goToResource,
       nextChapter,
