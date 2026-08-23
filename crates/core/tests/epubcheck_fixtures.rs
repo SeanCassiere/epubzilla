@@ -8,6 +8,15 @@ use std::path::PathBuf;
 use epubzilla_core::{ChapterContent, ContentFormat, Metadata, Session, SpineItemId};
 use zip::write::SimpleFileOptions;
 
+/// A tiny valid 1x1 transparent PNG (same bytes as the M1.5 fixtures).
+const PNG_1X1: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+    0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+    0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+    0x42, 0x60, 0x82,
+];
+
 fn fixtures_dir() -> PathBuf {
     // crates/core → workspace root → target/epubcheck-fixtures
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/epubcheck-fixtures");
@@ -65,9 +74,26 @@ fn generate_epubcheck_fixtures() {
         let book = session.add_chapter(&book_id, title, None).unwrap();
         resources.push(book.spine.last().unwrap().resource.clone());
     }
+    // M3.3: an added image, referenced from the first chapter's Markdown, so
+    // epubcheck validates add_resource output and the in-book reference.
+    let book = session
+        .add_resource(&book_id, "pixel.png", "image/png", PNG_1X1.to_vec())
+        .unwrap();
+    let image_path = book
+        .resources
+        .iter()
+        .find(|r| r.media_type == "image/png")
+        .map(|r| r.path.clone())
+        .unwrap();
+    assert_eq!(image_path, "OEBPS/images/pixel.png");
     for (n, resource) in resources.iter().enumerate() {
+        let image = if n == 0 {
+            "\n![A pixel](images/pixel.png)\n"
+        } else {
+            ""
+        };
         let md = format!(
-            "# Chapter {n}\n\nBödy with *émphasis*, `code`, and a list ✓:\n\n- one\n- two\n",
+            "# Chapter {n}\n\nBödy with *émphasis*, `code`, and a list ✓:\n\n- one\n- two\n{image}",
         );
         session
             .write_chapter(

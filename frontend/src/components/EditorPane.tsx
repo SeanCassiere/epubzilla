@@ -17,6 +17,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ContentFormat } from "@bindings/ContentFormat";
 import { useReader, describeError } from "../state/reader";
 import * as api from "../lib/api";
+import { imageMarkdown, relativeResourcePath } from "../lib/editing";
+import { pickImageFile } from "../lib/dialog";
 import { CodeEditor } from "./CodeEditor";
 import { MilkdownEditor } from "./MilkdownEditor";
 
@@ -45,8 +47,16 @@ function storeMode(mode: MarkdownMode) {
 }
 
 export function EditorPane() {
-  const { book, spineIndex, stopEditing, writeChapter, setNavGuard } =
-    useReader();
+  const {
+    book,
+    spineIndex,
+    stopEditing,
+    requestStopEditing,
+    writeChapter,
+    setNavGuard,
+    setEditorBuffer,
+    addResource,
+  } = useReader();
   const resourceId = book?.spine[spineIndex]?.resource ?? null;
   const bookId = book?.id ?? null;
 
@@ -118,6 +128,20 @@ export function EditorPane() {
     }
   }, [buffer, resourceId, format, writeChapter]);
 
+  // Register the live buffer with the reader (M3.3) so the Header's
+  // unified save flow (Cmd/Ctrl+S) and unsaved-changes guard can apply or
+  // account for unapplied changes. Methods read refs, so one registration
+  // stays current for the pane's lifetime.
+  const applyRef = useRef(apply);
+  applyRef.current = apply;
+  useEffect(() => {
+    setEditorBuffer({
+      modified: () => modifiedRef.current,
+      apply: () => applyRef.current(),
+    });
+    return () => setEditorBuffer(null);
+  }, [setEditorBuffer]);
+
   const resolveLeave = useCallback(
     (proceed: boolean) => {
       pendingLeave?.resolve(proceed);
@@ -126,18 +150,36 @@ export function EditorPane() {
     [pendingLeave],
   );
 
-  /** "Done": back to reading — via the same guard when modified. */
-  const requestClose = useCallback(() => {
-    if (!modifiedRef.current) {
-      void stopEditing();
-      return;
+  // Insert-image plumbing (M3.3): the active surface registers a
+  // cursor-aware inserter; picking a file adds the resource to the book
+  // and drops a Markdown image reference into the buffer.
+  const insertImageRef = useRef<((src: string) => void) | null>(null);
+  const handleInsertImage = useCallback(async () => {
+    if (book === null || resourceId === null) return;
+    const osPath = await pickImageFile();
+    if (osPath === null) return;
+    const known = new Set(book.resources.map((r) => r.id));
+    const updated = await addResource(osPath);
+    if (updated === null) return;
+    // The one resource we didn't know before is the added image.
+    const added = updated.resources.find((r) => !known.has(r.id));
+    const chapterPath = updated.resources.find(
+      (r) => r.id === resourceId,
+    )?.path;
+    if (added === undefined || chapterPath === undefined) return;
+    const reference = relativeResourcePath(chapterPath, added.path);
+    const insert = insertImageRef.current;
+    if (insert !== null) {
+      insert(reference);
+    } else {
+      // Surface not ready: append at the end rather than dropping the ref.
+      setBuffer((current) =>
+        current === null
+          ? current
+          : `${current}\n\n${imageMarkdown(reference)}\n`,
+      );
     }
-    setPendingLeave({
-      resolve: (proceed) => {
-        if (proceed) void stopEditing();
-      },
-    });
-  }, [stopEditing]);
+  }, [book, resourceId, addResource]);
 
   if (loadError !== null) {
     return (
@@ -185,16 +227,29 @@ export function EditorPane() {
             edited as XHTML source to avoid losing anything.
           </span>
         )}
+        {format === "Markdown" && markdownMode === "source" && (
+          <button
+            type="button"
+            onClick={() => void handleInsertImage()}
+            title="Add an image to the book and reference it at the cursor"
+          >
+            Insert image…
+          </button>
+        )}
         <span className="editor-toolbar-spacer" />
         <button
           type="button"
           onClick={() => void apply()}
           disabled={!modified || applying}
-          title="Write the buffer into the book (book still needs saving)"
+          title="Write the buffer into the book (book still needs saving; Ctrl/Cmd+S saves everything)"
         >
           Apply
         </button>
-        <button type="button" onClick={requestClose}>
+        <button
+          type="button"
+          onClick={() => void requestStopEditing()}
+          title="Back to reading (Ctrl/Cmd+E)"
+        >
           Done
         </button>
       </div>
@@ -203,12 +258,18 @@ export function EditorPane() {
           Loading chapter…
         </p>
       ) : format === "Markdown" && markdownMode === "wysiwyg" ? (
-        <MilkdownEditor value={buffer} onChange={setBuffer} />
+        <MilkdownEditor
+          value={buffer}
+          onChange={setBuffer}
+          insertImageRef={insertImageRef}
+          onInsertImage={() => void handleInsertImage()}
+        />
       ) : (
         <CodeEditor
           value={buffer}
           language={format === "Markdown" ? "markdown" : "xml"}
           onChange={setBuffer}
+          insertImageRef={format === "Markdown" ? insertImageRef : undefined}
         />
       )}
       {pendingLeave !== null && (

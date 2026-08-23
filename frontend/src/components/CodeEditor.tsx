@@ -2,10 +2,11 @@
 // XHTML source mode for out-of-subset chapters. Deliberately thin — buffer
 // state lives in EditorPane; this only hosts the view.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type MutableRefObject } from "react";
 import { basicSetup, EditorView } from "codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import { xml } from "@codemirror/lang-xml";
+import { imageMarkdown } from "../lib/editing";
 
 export type CodeLanguage = "markdown" | "xml";
 
@@ -13,10 +14,17 @@ export function CodeEditor({
   value,
   language,
   onChange,
+  insertImageRef,
 }: {
   value: string;
   language: CodeLanguage;
   onChange: (next: string) => void;
+  /**
+   * M3.3: while mounted, receives a function that inserts a Markdown image
+   * reference for `src` at the current selection (EditorPane's insert-image
+   * flow calls it after add_resource_from_path).
+   */
+  insertImageRef?: MutableRefObject<((src: string) => void) | null>;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -51,6 +59,26 @@ export function CodeEditor({
       view.destroy();
     };
   }, [language]);
+
+  // Cursor-aware image insertion (M3.3): dispatch the Markdown reference at
+  // the current selection; the update listener reports the change upward.
+  useEffect(() => {
+    if (insertImageRef === undefined) return;
+    insertImageRef.current = (src: string) => {
+      const view = viewRef.current;
+      if (view === null) return;
+      const { from, to } = view.state.selection.main;
+      const text = imageMarkdown(src);
+      view.dispatch({
+        changes: { from, to, insert: text },
+        selection: { anchor: from + text.length },
+      });
+      view.focus();
+    };
+    return () => {
+      insertImageRef.current = null;
+    };
+  }, [insertImageRef]);
 
   // External value replacement (buffer reload) — no-op for the view's own
   // edits, which already produced this value via the update listener.

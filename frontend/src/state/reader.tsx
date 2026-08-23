@@ -82,10 +82,40 @@ interface ReaderState {
   /**
    * Navigation guard (M3.1): the editor registers an async veto consulted
    * before any chapter-leaving navigation (goTo/goToResource/next/prev and
-   * opening or creating another book). Resolve false to cancel. One guard
-   * at a time; pass null to unregister.
+   * leaving edit mode via requestStopEditing). Resolve false to cancel. One
+   * guard at a time; pass null to unregister. Open/new/window-close go
+   * through the Header's unified unsaved-changes guard instead (M3.3), which
+   * consults the editor buffer via the handle below — never both.
    */
   setNavGuard: (guard: (() => Promise<boolean>) | null) => void;
+  /** Leave edit mode via the navigation guard (Cmd/Ctrl+E, Done button). */
+  requestStopEditing: () => Promise<void>;
+  /**
+   * Editor buffer handle (M3.3): the editor registers its live buffer so the
+   * unified save flow and dirty guard can see and apply unapplied changes.
+   * Pass null to unregister.
+   */
+  setEditorBuffer: (handle: EditorBufferHandle | null) => void;
+  /** Whether a registered editor buffer has unapplied changes right now. */
+  editorBufferModified: () => boolean;
+  /**
+   * Apply the registered editor buffer if it has unapplied changes.
+   * Resolves true when there was nothing to apply or the apply succeeded.
+   */
+  applyEditorBuffer: () => Promise<boolean>;
+  /**
+   * add_resource_from_path on the open book (M3.3, image insertion);
+   * adopts and returns the updated Book (null on failure).
+   */
+  addResource: (osPath: string) => Promise<Book | null>;
+}
+
+/** Live view of the editor's chapter buffer (see setEditorBuffer). */
+export interface EditorBufferHandle {
+  /** Whether the buffer differs from its applied baseline. */
+  modified: () => boolean;
+  /** write_chapter the buffer; resolves true on success. */
+  apply: () => Promise<boolean>;
 }
 
 const ReaderContext = createContext<ReaderState | null>(null);
@@ -120,6 +150,25 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
     return guard === null ? true : guard();
   }, []);
 
+  // Editor buffer handle (M3.3): consulted by the Header's unified save
+  // flow and unsaved-changes guard; see setEditorBuffer docs.
+  const editorBufferRef = useRef<EditorBufferHandle | null>(null);
+  const setEditorBuffer = useCallback(
+    (handle: EditorBufferHandle | null) => {
+      editorBufferRef.current = handle;
+    },
+    [],
+  );
+  const editorBufferModified = useCallback(
+    (): boolean => editorBufferRef.current?.modified() ?? false,
+    [],
+  );
+  const applyEditorBuffer = useCallback(async (): Promise<boolean> => {
+    const handle = editorBufferRef.current;
+    if (handle === null || !handle.modified()) return true;
+    return handle.apply();
+  }, []);
+
   const loadChapter = useCallback(
     async (target: Book, index: number, targetFragment: string | null = null) => {
       const item = target.spine[index];
@@ -151,7 +200,9 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
    */
   const adoptBook = useCallback(
     async (acquire: () => Promise<Book>): Promise<boolean> => {
-      if (!(await passGuard())) return false;
+      // No guard here (M3.3): the Header's unified unsaved-changes dialog
+      // covers open/new/window-close for BOTH the book and the editor
+      // buffer, so consulting the editor's navGuard too would double-prompt.
       setEditing(false);
       setStatus("opening");
       setError(null);
@@ -178,7 +229,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
         return false;
       }
     },
-    [book, loadChapter, passGuard],
+    [book, loadChapter],
   );
 
   const openBook = useCallback(
@@ -373,6 +424,19 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
     if (book !== null && spineIndex >= 0) await loadChapter(book, spineIndex);
   }, [book, spineIndex, loadChapter]);
 
+  const requestStopEditing = useCallback(async () => {
+    if (!(await passGuard())) return;
+    await stopEditing();
+  }, [passGuard, stopEditing]);
+
+  const addResource = useCallback(
+    async (osPath: string): Promise<Book | null> => {
+      if (book === null) return null;
+      return applyEdit(() => api.addResourceFromPath(book.id, osPath));
+    },
+    [book, applyEdit],
+  );
+
   const writeChapter = useCallback(
     async (content: ChapterContent): Promise<boolean> => {
       if (book === null) return false;
@@ -408,6 +472,11 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       stopEditing,
       writeChapter,
       setNavGuard,
+      requestStopEditing,
+      setEditorBuffer,
+      editorBufferModified,
+      applyEditorBuffer,
+      addResource,
     }),
     [
       book,
@@ -432,6 +501,11 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       stopEditing,
       writeChapter,
       setNavGuard,
+      requestStopEditing,
+      setEditorBuffer,
+      editorBufferModified,
+      applyEditorBuffer,
+      addResource,
     ],
   );
 

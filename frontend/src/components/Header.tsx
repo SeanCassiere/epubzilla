@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { useReader, describeError } from "../state/reader";
+import { needsUnsavedPrompt } from "../lib/editing";
 import { pickEpubFile, pickSaveEpubPath, slugifyTitle } from "../lib/dialog";
 import { destroyWindow, interceptClose, onCloseRequested } from "../lib/window";
 import { MetadataForm } from "./MetadataForm";
@@ -40,6 +41,11 @@ export function Header() {
     createBook,
     updateMetadata,
     saveBook,
+    editing,
+    startEditing,
+    requestStopEditing,
+    editorBufferModified,
+    applyEditorBuffer,
   } = useReader();
   const [dialog, setDialog] = useState<DialogKind>(null);
   /**
@@ -52,13 +58,17 @@ export function Header() {
   );
 
   /**
-   * Save flow: in place when the book has a source, save-as (native save
-   * dialog) when it doesn't or when `alwaysPrompt` is set. Resolves true
-   * only when the book was actually saved (dialog cancel resolves false).
+   * Unified save flow (M2.4 + M3.3, see lib/editing.ts saveSteps): an
+   * unapplied editor buffer is applied (write_chapter) FIRST, then the book
+   * is saved — in place when it has a source, save-as (native save dialog)
+   * when it doesn't or when `alwaysPrompt` is set. Resolves true only when
+   * everything was actually persisted (a failed apply or a cancelled dialog
+   * resolves false and aborts).
    */
   const save = useCallback(
     async (alwaysPrompt = false): Promise<boolean> => {
       if (book === null) return false;
+      if (!(await applyEditorBuffer())) return false;
       let path: string | undefined;
       if (alwaysPrompt || book.source === null) {
         const picked = await pickSaveEpubPath(
@@ -69,36 +79,48 @@ export function Header() {
       }
       return saveBook(path);
     },
-    [book, saveBook],
+    [book, saveBook, applyEditorBuffer],
   );
 
   /**
-   * Dirty guard (M2.4): destructive transitions (open another book, create
-   * a new one, close the window) run through here. Clean book — proceed
-   * immediately; dirty — park the action behind the three-way modal.
+   * Unsaved-changes guard (M2.4, unified in M3.3): destructive transitions
+   * (open another book, create a new one, close the window) run through
+   * here. Nothing pending — proceed immediately; a dirty book OR an
+   * unapplied editor buffer — park the action behind ONE three-way modal
+   * (Save all / Discard / Cancel).
    */
   const guardDirty = useCallback(
     (action: () => void) => {
-      if (book !== null && book.dirty) {
+      if (needsUnsavedPrompt(book?.dirty ?? false, editorBufferModified())) {
         setPendingAction(() => action);
       } else {
         action();
       }
     },
-    [book],
+    [book, editorBufferModified],
   );
 
-  // Cmd/Ctrl+S saves (same flow as the Save button).
+  // Cmd/Ctrl+S saves (apply-then-save, same flow as the Save button);
+  // Cmd/Ctrl+E toggles edit mode (leaving goes through the editor's guard).
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+      if (!event.metaKey && !event.ctrlKey) return;
+      const key = event.key.toLowerCase();
+      if (key === "s") {
         event.preventDefault();
         void save();
+      } else if (key === "e") {
+        event.preventDefault();
+        if (editing) {
+          void requestStopEditing();
+        } else {
+          startEditing();
+        }
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [save]);
+  }, [save, editing, startEditing, requestStopEditing]);
 
   // Window-close guard: intercept close-requested while dirty and route it
   // through the same modal; on proceed, destroy the window for real. The
@@ -109,14 +131,20 @@ export function Header() {
   guardRef.current = guardDirty;
   useEffect(() => {
     const unlisten = onCloseRequested((event) => {
-      if (interceptClose(dirtyRef.current, event)) {
+      // Consult the live editor buffer too (M3.3): keystrokes don't
+      // re-render the Header, so the getter runs at close-request time.
+      const pending = needsUnsavedPrompt(
+        dirtyRef.current,
+        editorBufferModified(),
+      );
+      if (interceptClose(pending, event)) {
         guardRef.current(() => void destroyWindow());
       }
     });
     return () => {
       void unlisten.then((stop) => stop());
     };
-  }, []);
+  }, [editorBufferModified]);
 
   const handleOpen = async () => {
     const path = await pickEpubFile();
@@ -188,6 +216,7 @@ export function Header() {
               type="button"
               onClick={() => void save()}
               disabled={status === "opening"}
+              title="Save the book — applies the editor buffer first (Ctrl/Cmd+S)"
             >
               Save
             </button>
@@ -244,15 +273,16 @@ export function Header() {
             <button
               type="button"
               onClick={() => {
-                // Save (incl. save-as when source is null), then proceed.
-                // A failed or cancelled save aborts the transition.
+                // Save all: apply the editor buffer (if any), then save the
+                // book (incl. save-as when source is null), then proceed.
+                // A failed apply or a cancelled save aborts the transition.
                 void save().then((ok) => {
                   setPendingAction(null);
                   if (ok) pendingAction();
                 });
               }}
             >
-              Save
+              Save all
             </button>
             <button
               type="button"

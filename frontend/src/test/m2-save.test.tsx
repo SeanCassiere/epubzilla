@@ -392,7 +392,7 @@ describe("dirty guard on 'New book…'", () => {
       name: "Unsaved changes",
     });
     savePicks.push("/out/first.epub");
-    fireEvent.click(within(guard).getByRole("button", { name: "Save" }));
+    fireEvent.click(within(guard).getByRole("button", { name: "Save all" }));
 
     // save_book ran (save-as path) and the wizard opened afterwards.
     await waitFor(() => expect(saveBookCalls(calls)).toHaveLength(1));
