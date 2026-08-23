@@ -13,7 +13,13 @@
 import { useEffect, useRef, type MutableRefObject } from "react";
 import "@milkdown/kit/prose/view/style/prosemirror.css";
 import "@milkdown/kit/prose/tables/style/tables.css";
-import { Editor, defaultValueCtx, rootCtx } from "@milkdown/kit/core";
+import {
+  Editor,
+  defaultValueCtx,
+  editorViewOptionsCtx,
+  rootCtx,
+} from "@milkdown/kit/core";
+import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import {
   commonmark,
   createCodeBlockCommand,
@@ -110,6 +116,7 @@ export function MilkdownEditor({
   onReady,
   onInsertImage,
   insertImageRef,
+  resolveUrl,
 }: {
   value: string;
   onChange: (next: string) => void;
@@ -123,6 +130,14 @@ export function MilkdownEditor({
    * add_resource_from_path).
    */
   insertImageRef?: MutableRefObject<((src: string) => void) | null>;
+  /**
+   * Issue #52: render-time URL resolver for image sources. The DOCUMENT
+   * keeps whatever the Markdown says (zip-relative refs like
+   * `../images/x.png` — never rewritten, never serialized differently);
+   * only the rendered <img> element gets the resolved (epub:// asset
+   * protocol) URL so the image actually displays inside the editor.
+   */
+  resolveUrl?: (src: string) => string;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<Editor | null>(null);
@@ -130,6 +145,8 @@ export function MilkdownEditor({
   onChangeRef.current = onChange;
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
+  const resolveUrlRef = useRef(resolveUrl);
+  resolveUrlRef.current = resolveUrl;
 
   // The last markdown this editor holds — what it emitted, or the serialized
   // form of what was pushed into it. Breaks external-replacement feedback
@@ -153,6 +170,28 @@ export function MilkdownEditor({
           heldRef.current = markdown;
           onChangeRef.current(markdown);
         });
+        // Render-time image resolution (#52): a node view that maps the
+        // node's (relative) src through resolveUrl for DISPLAY only. The
+        // ProseMirror document — and therefore the serialized Markdown —
+        // keeps the relative path untouched. Node views without update()
+        // are recreated whenever the node's attrs change, so edits to the
+        // src re-resolve automatically.
+        ctx.update(editorViewOptionsCtx, (prev) => ({
+          ...prev,
+          nodeViews: {
+            ...prev.nodeViews,
+            image: (node: ProseNode) => {
+              const img = document.createElement("img");
+              const src = String(node.attrs.src ?? "");
+              img.src = resolveUrlRef.current?.(src) ?? src;
+              const alt = String(node.attrs.alt ?? "");
+              if (alt !== "") img.alt = alt;
+              const title = String(node.attrs.title ?? "");
+              if (title !== "") img.title = title;
+              return { dom: img };
+            },
+          },
+        }));
       })
       .use(commonmark)
       .use(gfm)
