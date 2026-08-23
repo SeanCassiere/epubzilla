@@ -9,6 +9,7 @@ import { useReader, describeError } from "../state/reader";
 import { needsUnsavedPrompt } from "../lib/editing";
 import { pickEpubFile, pickSaveEpubPath, slugifyTitle } from "../lib/dialog";
 import { destroyWindow, interceptClose, onCloseRequested } from "../lib/window";
+import { onShortcut } from "../lib/shortcuts";
 import { MetadataForm } from "./MetadataForm";
 import { CoverPicker } from "./CoverPicker";
 
@@ -101,33 +102,6 @@ export function Header() {
     [book, editorBufferModified],
   );
 
-  // Cmd/Ctrl+S saves (apply-then-save, same flow as the Save button);
-  // Cmd/Ctrl+E toggles edit mode (leaving goes through the editor's guard).
-  // The listener registers once and reads refs so rapid toggles never hit a
-  // stale closure between a state change and the effect re-registering.
-  const shortcutsRef = useRef({ save, editing, startEditing, requestStopEditing });
-  shortcutsRef.current = { save, editing, startEditing, requestStopEditing };
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!event.metaKey && !event.ctrlKey) return;
-      const key = event.key.toLowerCase();
-      const current = shortcutsRef.current;
-      if (key === "s") {
-        event.preventDefault();
-        void current.save();
-      } else if (key === "e") {
-        event.preventDefault();
-        if (current.editing) {
-          void current.requestStopEditing();
-        } else {
-          current.startEditing();
-        }
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
-
   // Window-close guard: intercept close-requested while dirty and route it
   // through the same modal; on proceed, destroy the window for real. The
   // listener registers once; refs keep it on the latest state/handlers.
@@ -158,6 +132,69 @@ export function Header() {
       await openBook(path);
     }
   };
+
+  // Header-owned app shortcuts (issue #74): Mod+S save (apply-then-save,
+  // same flow as the Save button), Mod+Shift+S save-as, Mod+O open,
+  // Mod+N new book, Mod+E toggle edit mode (leaving goes through the
+  // editor's guard). Actions arrive on the shared bus — from window/iframe
+  // keydown or from native menu accelerators (lib/shortcuts.ts) — so they
+  // work wherever focus sits. The subscriber registers once and reads refs
+  // so rapid toggles never hit a stale closure between a state change and
+  // the effect re-registering.
+  const shortcutsRef = useRef({
+    save,
+    editing,
+    startEditing,
+    requestStopEditing,
+    guardDirty,
+    handleOpen,
+    hasBook: book !== null,
+    busy: status === "opening",
+  });
+  shortcutsRef.current = {
+    save,
+    editing,
+    startEditing,
+    requestStopEditing,
+    guardDirty,
+    handleOpen,
+    hasBook: book !== null,
+    busy: status === "opening",
+  };
+  useEffect(
+    () =>
+      onShortcut((action) => {
+        const current = shortcutsRef.current;
+        switch (action) {
+          case "save":
+            if (!current.busy) void current.save();
+            break;
+          case "save-as":
+            if (current.hasBook && !current.busy) void current.save(true);
+            break;
+          case "open-book":
+            if (!current.busy) {
+              current.guardDirty(() => void current.handleOpen());
+            }
+            break;
+          case "new-book":
+            if (!current.busy) {
+              current.guardDirty(() => setDialog("new-book"));
+            }
+            break;
+          case "toggle-edit":
+            if (current.editing) {
+              void current.requestStopEditing();
+            } else {
+              current.startEditing(); // self-guards: EPUB 3 + chapter open
+            }
+            break;
+          default:
+            break;
+        }
+      }),
+    [],
+  );
 
   // EPUB 2 books are read-only (mutations return UnsupportedFeature); the
   // editing affordance is disabled up front instead of relying on the error.
@@ -198,6 +235,7 @@ export function Header() {
           type="button"
           onClick={() => guardDirty(() => setDialog("new-book"))}
           disabled={status === "opening"}
+          title="Start a new book (Ctrl/Cmd+N)"
         >
           New book…
         </button>
@@ -205,6 +243,7 @@ export function Header() {
           type="button"
           onClick={() => guardDirty(() => void handleOpen())}
           disabled={status === "opening"}
+          title="Open an EPUB (Ctrl/Cmd+O)"
         >
           Open book…
         </button>
@@ -230,6 +269,7 @@ export function Header() {
               type="button"
               onClick={() => void save(true)}
               disabled={status === "opening"}
+              title="Save to a new file (Ctrl/Cmd+Shift+S)"
             >
               Save as…
             </button>

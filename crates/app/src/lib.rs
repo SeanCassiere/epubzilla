@@ -3,18 +3,30 @@
 //! resources.
 
 mod commands;
+mod menu;
 mod protocol;
 
 use std::sync::Mutex;
 
 use commands::SharedSession;
 use epubzilla_core::Session;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // Native menu with accelerators (issue #74). Activations forward
+        // the item id to the webview; lib/menu.ts routes them onto the
+        // same action bus as the DOM keyboard shortcuts.
+        .setup(|app| {
+            let menu = menu::build(app.handle())?;
+            app.set_menu(menu)?;
+            Ok(())
+        })
+        .on_menu_event(|app, event| {
+            let _ = app.emit("app-menu", event.id().0.clone());
+        })
         .manage(Mutex::new(Session::new()) as SharedSession)
         .invoke_handler(tauri::generate_handler![
             commands::open_book,

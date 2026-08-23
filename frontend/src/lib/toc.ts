@@ -84,6 +84,46 @@ export function countNavPoints(nav: ReadonlyArray<NavPoint>): number {
 }
 
 /**
+ * Intent of one key press inside the TOC tree (issue #74). Standard
+ * tree-view keyboard model: Up/Down walk visible entries, Home/End jump
+ * to the edges, Right expands (or moves on), Left collapses (or climbs
+ * to the parent). Enter/Space activate natively (the rows are buttons).
+ */
+export type TocKeyIntent =
+  | "next"
+  | "previous"
+  | "first"
+  | "last"
+  | "expand-or-next"
+  | "collapse-or-parent";
+
+/** Map a KeyboardEvent.key to its tree intent (null = not a tree key). */
+export function tocKeyIntent(key: string): TocKeyIntent | null {
+  switch (key) {
+    case "ArrowDown":
+      return "next";
+    case "ArrowUp":
+      return "previous";
+    case "Home":
+      return "first";
+    case "End":
+      return "last";
+    case "ArrowRight":
+      return "expand-or-next";
+    case "ArrowLeft":
+      return "collapse-or-parent";
+    default:
+      return null;
+  }
+}
+
+/** Parent of a tree-path key: `"0.2.1"` -> `"0.2"`; roots have none. */
+export function parentKey(key: string): string | null {
+  const dot = key.lastIndexOf(".");
+  return dot === -1 ? null : key.slice(0, dot);
+}
+
+/**
  * Keyboard guard for ArrowLeft/ArrowRight chapter shortcuts: ignore the
  * keys while focus sits in a text-entry control so caret movement wins.
  */
