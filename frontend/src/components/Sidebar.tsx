@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useReader } from "../state/reader";
 import { resourceUrl } from "../lib/api";
 import { onShortcut } from "../lib/shortcuts";
@@ -13,16 +13,41 @@ type Tab = "contents" | "chapters" | "checks";
  * (unchanged), "Chapters" is the M2.3 chapter management panel, "Checks"
  * is the issue #72 validation panel. Mounted keyed by book.id (App.tsx)
  * so tab choice and TOC expansion reset per book; only the active panel
- * is mounted.
+ * is mounted, but each panel's scroll offset is saved before a tab switch
+ * and restored after remount so the offsets stay independent (issue #89,
+ * rule documented in lib/sidebarScroll.ts).
  */
 export function Sidebar() {
   const { book } = useReader();
   const [tab, setTab] = useState<Tab>("contents");
 
+  // Per-tab scroll offsets (issue #89). Every panel's root element is the
+  // `.toc-sidebar` scroll container inside the focus wrapper.
+  const scrollOffsets = useRef(new Map<Tab, number>());
+  const tabRef = useRef<Tab>(tab);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const panelScroller = () =>
+    rootRef.current?.querySelector<HTMLElement>(
+      ".sidebar-panel-focus > .toc-sidebar",
+    ) ?? null;
+  const selectTab = useCallback((next: Tab) => {
+    const prev = tabRef.current;
+    if (next === prev) return;
+    const scroller = panelScroller();
+    if (scroller !== null) scrollOffsets.current.set(prev, scroller.scrollTop);
+    tabRef.current = next;
+    setTab(next);
+  }, []);
+  useLayoutEffect(() => {
+    const saved = scrollOffsets.current.get(tab);
+    if (saved === undefined) return; // never visited: keep the natural top
+    const scroller = panelScroller();
+    if (scroller !== null) scroller.scrollTop = saved;
+  }, [tab]);
+
   // Sidebar shortcuts (issue #74): Mod+1/2/3 select a tab AND move focus
   // into its panel so the keyboard lands where the eyes do (the TOC tree
   // focuses its current entry; other panels focus their first control).
-  const rootRef = useRef<HTMLDivElement | null>(null);
   useEffect(
     () =>
       onShortcut((action) => {
@@ -35,7 +60,7 @@ export function Sidebar() {
                 ? "checks"
                 : null;
         if (target === null) return;
-        setTab(target);
+        selectTab(target);
         // Focus after the panel for the (possibly new) tab has mounted.
         requestAnimationFrame(() => {
           const root = rootRef.current;
@@ -48,7 +73,7 @@ export function Sidebar() {
           el?.focus();
         });
       }),
-    [],
+    [selectTab],
   );
 
   if (book === null) return null;
@@ -59,7 +84,7 @@ export function Sidebar() {
       role="tab"
       aria-selected={tab === id}
       className={"sidebar-tab" + (tab === id ? " sidebar-tab-active" : "")}
-      onClick={() => setTab(id)}
+      onClick={() => selectTab(id)}
     >
       {label}
     </button>
