@@ -1,7 +1,7 @@
 // Chapter-iframe click handling (issue #84). No React, no Tauri — pure
 // decision logic for one click inside the sandboxed chapter document:
-// inter-chapter link navigation first (annotated `data-epub-link` anchors,
-// see chapter.ts), then the paginated click page-turn zones (issue #75).
+// inter-chapter link navigation on annotated `data-epub-link` anchors
+// (see chapter.ts).
 //
 // Realm caveat, and the reason this module exists: the click listener runs
 // in the parent window but receives nodes from the IFRAME's realm, where
@@ -13,7 +13,6 @@
 // foreign-realm-like fakes that fail `instanceof Element` on purpose.
 
 import { splitHref } from "./toc";
-import type { ReadingMode } from "./readingMode";
 
 /** `Node.ELEMENT_NODE` without depending on any realm's `Node` global. */
 const ELEMENT_NODE = 1;
@@ -37,35 +36,22 @@ export function eventTargetElement(target: unknown): Element | null {
 export interface ChapterClickEvent {
   /** Raw `event.target` — typed unknown because it crosses realms. */
   target: unknown;
-  clientX: number;
   preventDefault: () => void;
 }
 
 /** Reader state and actions the click decision depends on. */
 export interface ChapterClickContext {
-  mode: ReadingMode;
-  /** Iframe viewport width in CSS px; <= 0 disables the click zones. */
-  viewportWidth: number;
-  /** False while the user has an active text selection in the chapter. */
-  selectionCollapsed: boolean;
   /** Navigate the APP to a resource path + optional fragment. */
   goToResource: (path: string, fragment: string | null) => void;
-  turnPage: (delta: 1 | -1) => void;
 }
 
 /**
- * Handle one click inside the chapter document.
+ * Handle one click inside the chapter document: a click on/inside an
+ * `a[data-epub-link]` navigates the app to the target chapter (honoring
+ * `#fragment`) and calls preventDefault so the sandboxed iframe never
+ * follows the raw relative href itself.
  *
- * Priority order (links always beat page turns):
- * 1. A click on/inside an `a[data-epub-link]` navigates the app to the
- *    target chapter (honoring `#fragment`) and calls preventDefault so
- *    the sandboxed iframe never follows the raw relative href itself.
- * 2. Otherwise, in paginated mode, clicks in the outer thirds of the
- *    viewport turn the page — unless the click is inside ANY anchor
- *    (stripped external links stay inert, they don't turn pages) or a
- *    text selection is active. The middle third stays inert.
- *
- * Returns true when the click was consumed (navigation or page turn).
+ * Returns true when the click was consumed (navigation).
  */
 export function handleChapterClick(
   event: ChapterClickEvent,
@@ -80,21 +66,6 @@ export function handleChapterClick(
     event.preventDefault();
     const { path, fragment } = splitHref(link);
     ctx.goToResource(path, fragment);
-    return true;
-  }
-  // Paginated click page-turn (issue #75): outer thirds of the viewport
-  // turn the page; the middle third stays inert so text selection and
-  // in-page links behave normally.
-  if (ctx.mode !== "paginated") return false;
-  if (target.closest("a") !== null) return false;
-  if (!ctx.selectionCollapsed) return false;
-  if (ctx.viewportWidth <= 0) return false;
-  if (event.clientX >= (ctx.viewportWidth * 2) / 3) {
-    ctx.turnPage(1);
-    return true;
-  }
-  if (event.clientX <= ctx.viewportWidth / 3) {
-    ctx.turnPage(-1);
     return true;
   }
   return false;

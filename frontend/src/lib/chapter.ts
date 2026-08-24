@@ -178,9 +178,6 @@ export function stripActiveContent(doc: Document): void {
 /** Render-layer reading theme requested by the reader UI. */
 export type ReadingTheme = "light" | "dark";
 
-/** Render-layer reading mode requested by the reader UI (issue #75). */
-export type ReadingMode = "scrolled" | "paginated";
-
 /**
  * Shared reading defaults (issue #55): books with minimal or plain CSS
  * otherwise render as full-width, left-aligned text ("unstyled html").
@@ -235,89 +232,6 @@ ${CHAPTER_BASE_CSS}
 `.trim();
 
 /**
- * Marker attribute of the pagination wrapper: the single-column multicol
- * container the chapter content is moved into in paginated mode. The
- * parent (ReaderPane, via lib/paginator.ts) turns pages by translating
- * this element horizontally.
- */
-export const PAGINATOR_ATTR = "data-epubzilla-paginator";
-
-/**
- * Marker attribute of the zero-height sentinel appended after the last
- * piece of chapter content inside the wrapper. Its layout position (via
- * getBoundingClientRect) marks the horizontal end of the fragmented
- * content, which is how the parent derives the page count.
- */
-export const SENTINEL_ATTR = "data-epubzilla-sentinel";
-
-/**
- * Paginated reading mode (issue #75, reworked for #88): the chapter
- * content is moved into a wrapper element that becomes a single-column
- * CSS multicol container pinned to the viewport height, so overflowing
- * content fragments into horizontal overflow columns — one column per
- * page, each exactly the wrapper's width (the body's content box). The
- * body clips (`overflow: hidden`) and the parent (ReaderPane, via
- * lib/paginator.ts) turns pages by translating the wrapper with a CSS
- * transform in steps of column width + column gap.
- *
- * Why a transformed wrapper instead of scrolling the body (issue #88):
- * WebKit (the Tauri webview) clips a multicol container's overflow
- * columns but does not reliably expose them through the container's own
- * scrollWidth/scrollLeft — the measured page count collapsed to 1 in the
- * real app and the first page turn skipped to the next chapter. A CSS
- * transform plus getBoundingClientRect-based measurement (see the
- * sentinel above) uses only geometry every engine reports from real
- * layout, with no dependence on scroll-overflow propagation. No scripts
- * run inside the sandboxed iframe — geometry is measured and driven
- * entirely from the parent.
- *
- * Composition with the other injected defaults:
- * - The #55 reading measure (max-width cap + centered margins on body)
- *   is untouched — the wrapper fills the body's content box, so each
- *   page is one comfortable column of text.
- * - The #66/#78 color-scheme pins are untouched — pagination sets layout
- *   properties only, never colors, so light/dark/auto themes compose.
- * - Unlike the low-priority defaults, this block is appended LAST in
- *   <head>: pagination is an explicit user choice, so at equal
- *   specificity it wins over book CSS for the layout properties it sets
- *   (author colors and typography still apply within each page).
- *
- * Presentation-only: the wrapper, sentinel, and CSS are injected into the
- * rendered srcdoc at display time, never persisted into the EPUB.
- */
-export const PAGINATED_CHAPTER_CSS = `
-html {
-  height: 100%;
-  overflow: hidden;
-}
-body {
-  height: 100%;
-  box-sizing: border-box;
-  overflow: hidden;
-  margin-block: 0;
-  padding: 2rem 1.5rem;
-}
-[${PAGINATOR_ATTR}] {
-  height: 100%;
-  column-count: 1;
-  column-gap: 3rem;
-  column-fill: auto;
-  orphans: 2;
-  widows: 2;
-}
-[${SENTINEL_ATTR}] {
-  display: block;
-  block-size: 0;
-  margin: 0;
-  padding: 0;
-}
-img, svg, video {
-  break-inside: avoid;
-  max-height: 90vh;
-}
-`.trim();
-
-/**
  * True when the chapter brings visual styling of its own (issue #78):
  * a linked stylesheet, an embedded <style>, or an inline `style`
  * attribute that sets colors. Such books are rendered with the light
@@ -356,11 +270,6 @@ export function chapterHasAuthorStyling(doc: Document): boolean {
  * readable. Theming is presentation-only: it lives in the injected
  * defaults block of the rendered srcdoc and never touches stored EPUB
  * content.
- *
- * `mode` is the requested reading mode (default "scrolled", the
- * historical rendering). "paginated" appends PAGINATED_CHAPTER_CSS as a
- * separate render-layer block (issue #75); like theming it never touches
- * stored EPUB content.
  */
 export function prepareChapterHtml(
   xhtml: string,
@@ -368,7 +277,6 @@ export function prepareChapterHtml(
   resourceUrl: ResourceUrlResolver,
   xhtmlPaths: ReadonlySet<string> = new Set(),
   theme: ReadingTheme = "light",
-  mode: ReadingMode = "scrolled",
 ): string {
   const doc = new DOMParser().parseFromString(xhtml, "text/html");
   stripActiveContent(doc);
@@ -382,33 +290,6 @@ export function prepareChapterHtml(
   style.textContent = renderDark ? DARK_CHAPTER_CSS : DEFAULT_CHAPTER_CSS;
   const head = doc.head;
   head.insertBefore(style, head.firstChild);
-
-  if (mode === "paginated") {
-    const pagination = doc.createElement("style");
-    pagination.setAttribute("data-epubzilla", "pagination");
-    pagination.textContent = PAGINATED_CHAPTER_CSS;
-    // Appended last: the user's explicit layout choice outranks book CSS
-    // at equal specificity (see PAGINATED_CHAPTER_CSS).
-    head.appendChild(pagination);
-
-    // Move the chapter content into the pagination wrapper (the multicol
-    // container the parent translates for page turns) and append the
-    // end-of-content sentinel used to measure the page count. Render-layer
-    // only — the stored EPUB markup is never modified. Tradeoff: author
-    // selectors keyed on `body >` no longer match in paginated mode; the
-    // alternative (multicol directly on body) cannot be paged reliably in
-    // WebKit (issue #88).
-    const body = doc.body;
-    const wrapper = doc.createElement("div");
-    wrapper.setAttribute(PAGINATOR_ATTR, "");
-    while (body.firstChild !== null) {
-      wrapper.appendChild(body.firstChild);
-    }
-    const sentinel = doc.createElement("span");
-    sentinel.setAttribute(SENTINEL_ATTR, "");
-    wrapper.appendChild(sentinel);
-    body.appendChild(wrapper);
-  }
 
   return "<!doctype html>\n" + (doc.documentElement?.outerHTML ?? "");
 }

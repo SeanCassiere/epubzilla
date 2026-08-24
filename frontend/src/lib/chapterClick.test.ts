@@ -53,32 +53,18 @@ function foreignPlainElement(): ForeignElement {
 }
 
 /** Click event whose target came across the realm boundary. */
-function clickOn(target: unknown, clientX = 0) {
+function clickOn(target: unknown) {
   return {
     target,
-    clientX,
     preventDefault: vi.fn<() => void>(),
   } satisfies ChapterClickEvent;
 }
 
-/** Context with spies; scrolled mode and a 900px viewport by default. */
-function makeContext(
-  overrides: Partial<ChapterClickContext> = {},
-): ChapterClickContext & {
-  goToResource: ReturnType<typeof vi.fn>;
-  turnPage: ReturnType<typeof vi.fn>;
+/** Context with spies. */
+function makeContext(): ChapterClickContext & {
+  goToResource: ReturnType<typeof vi.fn<ChapterClickContext["goToResource"]>>;
 } {
-  return {
-    mode: "scrolled",
-    viewportWidth: 900,
-    selectionCollapsed: true,
-    goToResource: vi.fn(),
-    turnPage: vi.fn(),
-    ...overrides,
-  } as ChapterClickContext & {
-    goToResource: ReturnType<typeof vi.fn>;
-    turnPage: ReturnType<typeof vi.fn>;
-  };
+  return { goToResource: vi.fn<ChapterClickContext["goToResource"]>() };
 }
 
 describe("eventTargetElement", () => {
@@ -148,15 +134,6 @@ describe("handleChapterClick — inter-chapter links (issue #84)", () => {
     expect(ctx.goToResource).toHaveBeenCalledWith("OEBPS/notes.xhtml", "n3");
   });
 
-  it("a link click never turns the page, even in a paginated click zone", () => {
-    const ctx = makeContext({ mode: "paginated", viewportWidth: 900 });
-    // clientX 850 sits in the right-hand page-turn third.
-    const event = clickOn(foreignAnchor("OEBPS/ch2.xhtml"), 850);
-    expect(handleChapterClick(event, ctx)).toBe(true);
-    expect(ctx.goToResource).toHaveBeenCalledTimes(1);
-    expect(ctx.turnPage).not.toHaveBeenCalled();
-  });
-
   it("ignores anchors without data-epub-link (stripped external links)", () => {
     const ctx = makeContext();
     const event = clickOn(foreignAnchor(null));
@@ -164,59 +141,12 @@ describe("handleChapterClick — inter-chapter links (issue #84)", () => {
     expect(event.preventDefault).not.toHaveBeenCalled();
     expect(ctx.goToResource).not.toHaveBeenCalled();
   });
-});
 
-describe("handleChapterClick — paginated click zones (issue #75)", () => {
-  it("turns forward in the right third and backward in the left third", () => {
-    const ctx = makeContext({ mode: "paginated", viewportWidth: 900 });
-    expect(handleChapterClick(clickOn(foreignPlainElement(), 850), ctx)).toBe(
-      true,
-    );
-    expect(ctx.turnPage).toHaveBeenLastCalledWith(1);
-    expect(handleChapterClick(clickOn(foreignPlainElement(), 50), ctx)).toBe(
-      true,
-    );
-    expect(ctx.turnPage).toHaveBeenLastCalledWith(-1);
-  });
-
-  it("leaves the middle third inert", () => {
-    const ctx = makeContext({ mode: "paginated", viewportWidth: 900 });
-    expect(handleChapterClick(clickOn(foreignPlainElement(), 450), ctx)).toBe(
+  it("ignores clicks outside any anchor", () => {
+    const ctx = makeContext();
+    expect(handleChapterClick(clickOn(foreignPlainElement()), ctx)).toBe(
       false,
     );
-    expect(ctx.turnPage).not.toHaveBeenCalled();
-  });
-
-  it("does not turn pages on clicks inside plain anchors", () => {
-    const ctx = makeContext({ mode: "paginated", viewportWidth: 900 });
-    expect(handleChapterClick(clickOn(foreignAnchor(null), 850), ctx)).toBe(
-      false,
-    );
-    expect(ctx.turnPage).not.toHaveBeenCalled();
-  });
-
-  it("does not turn pages while a text selection is active", () => {
-    const ctx = makeContext({
-      mode: "paginated",
-      viewportWidth: 900,
-      selectionCollapsed: false,
-    });
-    expect(handleChapterClick(clickOn(foreignPlainElement(), 850), ctx)).toBe(
-      false,
-    );
-    expect(ctx.turnPage).not.toHaveBeenCalled();
-  });
-
-  it("does nothing with a zero-width viewport or in scrolled mode", () => {
-    const zero = makeContext({ mode: "paginated", viewportWidth: 0 });
-    expect(handleChapterClick(clickOn(foreignPlainElement(), 850), zero)).toBe(
-      false,
-    );
-    expect(zero.turnPage).not.toHaveBeenCalled();
-    const scrolled = makeContext({ mode: "scrolled" });
-    expect(
-      handleChapterClick(clickOn(foreignPlainElement(), 850), scrolled),
-    ).toBe(false);
-    expect(scrolled.turnPage).not.toHaveBeenCalled();
+    expect(ctx.goToResource).not.toHaveBeenCalled();
   });
 });

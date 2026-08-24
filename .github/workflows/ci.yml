@@ -23,15 +23,6 @@ jobs:
         run: pnpm typecheck
       - name: Unit tests
         run: pnpm --dir frontend test
-      # Engine-backed layout tests (issue #88): the paginated reading mode
-      # once broke in the real WebKit runtime while the jsdom suite stayed
-      # green (jsdom performs no layout). These run the production
-      # pagination code against Playwright's WebKit — the Tauri webview's
-      # engine family — verifying real multi-page geometry and page turns.
-      - name: Install WebKit (Playwright)
-        run: pnpm --dir frontend exec playwright install --with-deps webkit
-      - name: Engine tests (WebKit layout)
-        run: pnpm --dir frontend test:engine
       - name: Build
         run: pnpm build:frontend
       - name: No hand-written model type mirrors (ADR-0006)
