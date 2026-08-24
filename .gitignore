@@ -26,3 +26,7 @@ Thumbs.db
 
 # Agent worktrees
 .claude/worktrees/
+
+# Playwright (frontend engine tests)
+test-results/
+playwright-report/
