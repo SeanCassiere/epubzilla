@@ -201,7 +201,11 @@ export function Header() {
   const isEpub2 = book !== null && book.epub_version === "V2";
 
   return (
-    <header className="app-header">
+    // data-tauri-drag-region: with the macOS overlay titlebar (issue #61)
+    // the header background doubles as a window drag handle. Drag only
+    // fires when the mousedown target IS the header element, so the
+    // buttons and title inside keep working normally.
+    <header className="app-header" data-tauri-drag-region>
       <div className="app-header-main">
         <h1 className="app-title">epubzilla</h1>
         {book !== null && (

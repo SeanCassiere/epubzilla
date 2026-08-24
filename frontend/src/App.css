@@ -7,11 +7,47 @@ body {
   margin: 0;
 }
 
-#root,
-.app-shell {
+#root {
   height: 100vh;
+}
+
+/* Shell (issue #61): a row — full-height sidebar column on the left, the
+   header + reader stacked in the content column on the right. This is what
+   lets the sidebar run edge-to-edge under the macOS overlay titlebar. */
+.app-shell {
+  height: 100%;
+  display: flex;
+  /* Overlay-titlebar insets: zero on Windows/Linux (native titlebar);
+     App.tsx sets data-platform="macos" where the traffic lights float
+     over the top-left of the content. */
+  --titlebar-inset: 0px;
+  --traffic-lights-inset: 0px;
+}
+
+.app-shell[data-platform="macos"] {
+  --titlebar-inset: 52px;
+  --traffic-lights-inset: 84px;
+}
+
+/* Traffic-light spacer at the top of the sidebar; also a drag handle
+   (data-tauri-drag-region in Sidebar.tsx). Collapses to zero height on
+   platforms with a native titlebar. */
+.titlebar-drag-zone {
+  flex: none;
+  height: var(--titlebar-inset);
+}
+
+.app-content {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* No sidebar (no book open): the header is the window's top-left content,
+   so it must clear the floating traffic lights itself. */
+.app-shell[data-platform="macos"] > .app-content:first-child > .app-header {
+  padding-left: var(--traffic-lights-inset);
 }
 
 .app-header {
@@ -113,20 +149,11 @@ body {
   padding: 0.15rem 0.3rem;
 }
 
-/* Grid: the TOC <aside> is the first column when a nav tree exists. */
-.app-main {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: 1fr;
-}
-
-.app-main.with-toc {
-  grid-template-columns: 17rem 1fr;
-}
-
-/* Tabbed sidebar column (M2.3): tab strip above the active panel. */
+/* Tabbed sidebar column (M2.3): tab strip above the active panel.
+   Full-height left column since issue #61. */
 .sidebar {
+  flex: none;
+  width: 17rem;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -330,6 +357,7 @@ body {
 }
 
 .reader-pane {
+  flex: 1;
   display: flex;
   flex-direction: column;
   min-height: 0;
