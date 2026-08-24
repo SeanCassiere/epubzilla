@@ -6,7 +6,6 @@ import { Sidebar } from "./components/Sidebar";
 import { UpdateNotice } from "./components/UpdateNotice";
 import { handleShortcutKeydown } from "./lib/shortcuts";
 import { bridgeMenuEvents } from "./lib/menu";
-import { isMacOS } from "./lib/platform";
 import "./App.css";
 
 // Shell body (issue #61): a full-height sidebar column on the left, with
@@ -43,14 +42,11 @@ function App() {
       void unlisten.then((stop) => stop());
     };
   }, []);
-  // data-platform gates the macOS overlay-titlebar insets in App.css so
-  // Windows/Linux (native titlebar) keep a zero inset.
+  // The macOS overlay-titlebar insets and vibrancy layering are gated by
+  // the data-platform attribute main.tsx stamps on <html>.
   return (
     <ReaderProvider>
-      <div
-        className="app-shell"
-        data-platform={isMacOS() ? "macos" : undefined}
-      >
+      <div className="app-shell">
         <MainArea />
       </div>
     </ReaderProvider>

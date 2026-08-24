@@ -16,7 +16,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 epubzilla-core = { path = "../core" }
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["macos-private-api"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 percent-encoding = "2"
