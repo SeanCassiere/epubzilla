@@ -42,3 +42,43 @@ export async function onCloseRequested(
 export function destroyWindow(): Promise<void> {
   return getCurrentWindow().destroy();
 }
+
+/**
+ * Elements that must never start a window drag: interactive controls, and
+ * anything inside a modal (the metadata/unsaved-changes dialogs render
+ * inside the header element, so their padding would otherwise drag the
+ * window).
+ */
+const DRAG_EXCLUDED =
+  "button, a, input, select, textarea, [contenteditable], [role='tab'], .modal-overlay";
+
+/**
+ * Whole-surface titlebar drag (issue #61 follow-up). The declarative
+ * data-tauri-drag-region attribute only fires when the mousedown TARGET is
+ * the attributed element itself, and the header's background is almost
+ * fully covered by children — so dragging only worked on padding slivers.
+ * This handler goes on the header instead: any left mousedown that isn't
+ * on an interactive control starts a window drag, and a double click
+ * toggles maximize, matching native titlebar behaviour.
+ */
+export function beginTitlebarDrag(event: {
+  button: number;
+  detail: number;
+  target: EventTarget | null;
+}): void {
+  if (event.button !== 0) return;
+  const target = event.target;
+  if (target instanceof Element && target.closest(DRAG_EXCLUDED) !== null) {
+    return;
+  }
+  try {
+    const window = getCurrentWindow();
+    if (event.detail === 2) {
+      void window.toggleMaximize();
+    } else {
+      void window.startDragging();
+    }
+  } catch {
+    // Outside a real Tauri window (tests, plain browser): no-op.
+  }
+}

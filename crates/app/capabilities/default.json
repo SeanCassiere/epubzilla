@@ -10,6 +10,8 @@
     "dialog:allow-confirm",
     "dialog:allow-ask",
     "core:window:allow-destroy",
+    "core:window:allow-start-dragging",
+    "core:window:allow-toggle-maximize",
     "updater:allow-check",
     {
       "identifier": "opener:allow-open-url",
