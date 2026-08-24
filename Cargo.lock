@@ -1062,7 +1062,7 @@ dependencies = [
 
 [[package]]
 name = "epubzilla-app"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "epubzilla-core",
  "percent-encoding",
@@ -1078,7 +1078,7 @@ dependencies = [
 
 [[package]]
 name = "epubzilla-cli"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -1088,7 +1088,7 @@ dependencies = [
 
 [[package]]
 name = "epubzilla-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "pulldown-cmark",
  "quick-xml 0.42.0",
