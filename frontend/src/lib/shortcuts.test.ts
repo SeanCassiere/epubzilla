@@ -34,7 +34,6 @@ describe("matchShortcut", () => {
     expect(meta("2")).toBe("sidebar-chapters");
     expect(meta("3")).toBe("sidebar-checks");
     expect(meta("S", { shiftKey: true })).toBe("save-as");
-    expect(meta("L", { shiftKey: true })).toBe("toggle-layout");
     expect(meta("T", { shiftKey: true })).toBe("cycle-theme");
     expect(meta("ArrowLeft", { altKey: true })).toBe("prev-chapter");
     expect(meta("ArrowRight", { altKey: true })).toBe("next-chapter");
@@ -55,9 +54,9 @@ describe("matchShortcut", () => {
     expect(matchShortcut(combo({ key: "S", shiftKey: true }))).toBeNull();
   });
 
-  it("leaves the reader-local keys (PR #83) alone", () => {
-    // Plain arrows, paging keys, and Space belong to the reader/page-turn
-    // layer; the app table must not claim them in any plain/shift form.
+  it("leaves the reader-local keys alone", () => {
+    // Plain arrows, paging keys, and Space belong to the reader layer;
+    // the app table must not claim them in any plain/shift form.
     for (const key of ["ArrowLeft", "ArrowRight", "PageUp", "PageDown", " "]) {
       expect(matchShortcut(combo({ key }))).toBeNull();
       expect(matchShortcut(combo({ key, shiftKey: true }))).toBeNull();
@@ -94,7 +93,6 @@ describe("menuActionFor", () => {
       "toggle-edit",
       "prev-chapter",
       "next-chapter",
-      "toggle-layout",
       "cycle-theme",
       "sidebar-contents",
       "sidebar-chapters",

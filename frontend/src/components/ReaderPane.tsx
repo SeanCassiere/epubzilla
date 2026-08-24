@@ -9,19 +9,6 @@ import {
   themePreferenceLabel,
   type ThemePreference,
 } from "../lib/theme";
-import {
-  MODE_STORAGE_KEY,
-  parseReadingMode,
-  readingModeLabel,
-  toggleReadingMode,
-  type ReadingMode,
-} from "../lib/readingMode";
-import {
-  applyPage,
-  currentPage,
-  measurePageGeometry,
-  pageForElement,
-} from "../lib/paginator";
 import { shouldHandleNavKey } from "../lib/toc";
 import { handleChapterClick } from "../lib/chapterClick";
 import { handleShortcutKeydown, onShortcut } from "../lib/shortcuts";
@@ -78,29 +65,6 @@ function useThemePreference(): [ThemePreference, () => void] {
     });
   }, []);
   return [preference, cycle];
-}
-
-/** Reading-mode preference persisted across sessions (issue #75). */
-function useReadingMode(): [ReadingMode, () => void] {
-  const [mode, setMode] = useState<ReadingMode>(() => {
-    try {
-      return parseReadingMode(localStorage.getItem(MODE_STORAGE_KEY));
-    } catch {
-      return "scrolled";
-    }
-  });
-  const toggle = useCallback(() => {
-    setMode((current) => {
-      const next = toggleReadingMode(current);
-      try {
-        localStorage.setItem(MODE_STORAGE_KEY, next);
-      } catch {
-        // Persistence is best-effort; the in-session state still applies.
-      }
-      return next;
-    });
-  }, []);
-  return [mode, toggle];
 }
 
 /**
@@ -165,18 +129,6 @@ export function ReaderPane() {
   const [themePreference, cycleThemePreference] = useThemePreference();
   const readingTheme = resolveReadingTheme(themePreference, systemDark);
 
-  // Reading mode (issue #75): scrolled is the historical default;
-  // paginated injects the multicol render layer into the srcdoc and the
-  // parent drives page turns by translating the pagination wrapper (see
-  // lib/paginator.ts, issue #88). Like theming this is presentation-only
-  // — stored EPUB content is never touched.
-  const [readingMode, toggleMode] = useReadingMode();
-  const modeRef = useRef(readingMode);
-  modeRef.current = readingMode;
-  // Set when a backward page turn leaves the chapter: the previous
-  // chapter should open at its LAST page. Consumed on the next frame load.
-  const openAtEndRef = useRef(false);
-
   const srcdoc = useMemo(() => {
     if (book === null || chapter === null) return null;
     const resource = book.resources.find((r) => r.id === chapter.resource);
@@ -192,53 +144,20 @@ export function ReaderPane() {
       (path) => api.resourceUrl(book.id, path),
       xhtmlPaths,
       readingTheme,
-      readingMode,
     );
-  }, [book, chapter, readingTheme, readingMode]);
+  }, [book, chapter, readingTheme]);
 
-  /**
-   * Turn one page in paginated mode. At the chapter edges this crosses
-   * into the neighboring chapter (backwards lands on its last page).
-   */
-  const turnPage = useCallback((delta: 1 | -1) => {
-    const doc = frameRef.current?.contentDocument;
-    if (doc === null || doc === undefined) return;
-    const pages = measurePageGeometry(doc);
-    if (pages === null) return;
-    const target = currentPage(doc) + delta;
-    if (target < 0) {
-      openAtEndRef.current = true;
-      void actionsRef.current.previousChapter();
-      return;
-    }
-    if (target >= pages.count) {
-      void actionsRef.current.nextChapter();
-      return;
-    }
-    applyPage(doc, target, pages);
-  }, []);
-
-  /**
-   * Backward navigation for keys: previous page in paginated mode
-   * (crossing chapters at page 0), previous chapter otherwise.
-   */
+  /** Backward navigation for keys. */
   const navigateBack = useCallback(() => {
-    if (modeRef.current === "paginated") turnPage(-1);
-    else void actionsRef.current.previousChapter();
-  }, [turnPage]);
+    void actionsRef.current.previousChapter();
+  }, []);
 
   /** Forward counterpart of navigateBack. */
   const navigateForward = useCallback(() => {
-    if (modeRef.current === "paginated") turnPage(1);
-    else void actionsRef.current.nextChapter();
-  }, [turnPage]);
+    void actionsRef.current.nextChapter();
+  }, []);
 
-  /**
-   * Scroll the iframe to the current fragment, or back to the start.
-   * Paginated mode positions horizontally: the page containing the
-   * fragment target, the last page when a backward chapter cross is
-   * pending (openAtEndRef), or page 0.
-   */
+  /** Scroll the iframe to the current fragment, or back to the start. */
   const applyScroll = useCallback(() => {
     const doc = frameRef.current?.contentDocument;
     if (doc === null || doc === undefined) return;
@@ -248,19 +167,6 @@ export function ReaderPane() {
         ? null
         : (doc.getElementById(target) ??
           doc.querySelector(`a[name="${CSS.escape(target)}"]`));
-    if (modeRef.current === "paginated") {
-      const pages = measurePageGeometry(doc);
-      if (pages === null) return;
-      if (el !== null) {
-        // Page of the column containing the fragment target (columns
-        // start at multiples of the step within the wrapper).
-        const page = pageForElement(doc, el);
-        if (page !== null) applyPage(doc, page, pages);
-        return;
-      }
-      applyPage(doc, openAtEndRef.current ? pages.count - 1 : 0, pages);
-      return;
-    }
     if (el !== null) {
       el.scrollIntoView({ block: "start" });
       return;
@@ -274,9 +180,8 @@ export function ReaderPane() {
   }, [applyScroll, fragment, srcdoc]);
 
   /**
-   * Each srcdoc load creates a fresh document: wire up link interception,
-   * keyboard shortcuts, and paginated click page-turns inside it, then
-   * position the scroll.
+   * Each srcdoc load creates a fresh document: wire up link interception
+   * and keyboard shortcuts inside it, then position the scroll.
    */
   const handleFrameLoad = useCallback(() => {
     const doc = frameRef.current?.contentDocument;
@@ -288,18 +193,10 @@ export function ReaderPane() {
         // live in handleChapterClick, which is realm-agnostic (issue #84:
         // a parent-realm `instanceof Element` guard here silently killed
         // link interception and let the sandboxed frame navigate itself).
-        const selection = doc.defaultView?.getSelection();
         handleChapterClick(event, {
-          mode: modeRef.current,
-          viewportWidth: doc.defaultView?.innerWidth ?? 0,
-          selectionCollapsed:
-            selection === null ||
-            selection === undefined ||
-            selection.isCollapsed,
           goToResource: (path, frag) => {
             void actionsRef.current.goToResource(path, frag);
           },
-          turnPage,
         });
       },
       true,
@@ -311,30 +208,14 @@ export function ReaderPane() {
       handleShortcutKeydown(event);
       if (event.defaultPrevented) return;
       if (event.altKey || event.ctrlKey || event.metaKey) return;
-      const paginated = modeRef.current === "paginated";
       if (event.key === "ArrowLeft") {
         navigateBack();
       } else if (event.key === "ArrowRight") {
         navigateForward();
-      } else if (
-        paginated &&
-        (event.key === "PageDown" || (event.key === " " && !event.shiftKey))
-      ) {
-        event.preventDefault();
-        turnPage(1);
-      } else if (
-        paginated &&
-        (event.key === "PageUp" || (event.key === " " && event.shiftKey))
-      ) {
-        event.preventDefault();
-        turnPage(-1);
       }
     });
     applyScroll();
-    // A pending "open at last page" (backward chapter cross) is satisfied
-    // by the applyScroll above; clear it only once the new doc has loaded.
-    openAtEndRef.current = false;
-  }, [applyScroll, navigateBack, navigateForward, turnPage]);
+  }, [applyScroll, navigateBack, navigateForward]);
 
   // App-level ArrowLeft/ArrowRight shortcuts (skipped in text inputs).
   useEffect(() => {
@@ -358,8 +239,7 @@ export function ReaderPane() {
 
   // Reader-owned app shortcuts (issue #74), from the shared bus (window or
   // iframe keydown, native menu accelerators): whole-chapter navigation
-  // (Mod+Alt+Left/Right — chapter-level even in paginated mode, unlike the
-  // plain arrows), layout toggle (Mod+Shift+L), theme cycle (Mod+Shift+T).
+  // (Mod+Alt+Left/Right), theme cycle (Mod+Shift+T).
   useEffect(
     () =>
       onShortcut((action) => {
@@ -370,9 +250,6 @@ export function ReaderPane() {
           case "next-chapter":
             void actionsRef.current.nextChapter();
             break;
-          case "toggle-layout":
-            toggleMode();
-            break;
           case "cycle-theme":
             cycleThemePreference();
             break;
@@ -380,24 +257,8 @@ export function ReaderPane() {
             break;
         }
       }),
-    [toggleMode, cycleThemePreference],
+    [cycleThemePreference],
   );
-
-  // Paginated mode: a window resize reflows the columns, so re-snap the
-  // horizontal offset to the nearest page boundary under the new geometry.
-  useEffect(() => {
-    if (readingMode !== "paginated") return;
-    const onResize = () => {
-      const doc = frameRef.current?.contentDocument;
-      if (doc === null || doc === undefined) return;
-      // Re-apply the current page index under the re-measured geometry:
-      // the reflow changed the step (and possibly the count), so the
-      // translation is recomputed and the index re-clamped.
-      applyPage(doc, currentPage(doc));
-    };
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [readingMode]);
 
   if (book === null) {
     return (
@@ -444,14 +305,6 @@ export function ReaderPane() {
           title="Reading theme (Ctrl/Cmd+Shift+T): Auto follows the system; Light/Dark force a scheme. Books with their own styling always render light."
         >
           {themePreferenceLabel(themePreference)}
-        </button>
-        <button
-          type="button"
-          className="mode-toggle"
-          onClick={toggleMode}
-          title="Reading layout (Ctrl/Cmd+Shift+L): Scrolled is a continuous column; Paginated turns viewport-height pages (arrow keys, PageUp/Down, Space, or click near the left/right edge)."
-        >
-          {readingModeLabel(readingMode)}
         </button>
         {book.epub_version === "V3" && spineIndex >= 0 && !editing && (
           <button

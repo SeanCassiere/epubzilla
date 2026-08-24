@@ -85,12 +85,6 @@ fn view_submenu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
         .separator()
         .item(&item(
             app,
-            "toggle-layout",
-            "Toggle Reading Layout",
-            "CmdOrCtrl+Shift+L",
-        )?)
-        .item(&item(
-            app,
             "cycle-theme",
             "Cycle Reading Theme",
             "CmdOrCtrl+Shift+T",

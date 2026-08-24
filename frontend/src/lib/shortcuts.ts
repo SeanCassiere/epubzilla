@@ -27,7 +27,6 @@ export type ShortcutAction =
   | "toggle-edit"
   | "prev-chapter"
   | "next-chapter"
-  | "toggle-layout"
   | "cycle-theme"
   | "sidebar-contents"
   | "sidebar-chapters"
@@ -54,7 +53,7 @@ export interface KeyCombo {
  *   Mod+S              save            Mod+Shift+S        save as
  *   Mod+E              toggle editor
  *   Mod+Alt+ArrowLeft  prev chapter    Mod+Alt+ArrowRight next chapter
- *   Mod+Shift+L        toggle layout   Mod+Shift+T        cycle theme
+ *   Mod+Shift+T        cycle theme
  *   Mod+1 / Mod+2 / Mod+3              sidebar Contents / Chapters / Checks
  */
 export function matchShortcut(combo: KeyCombo): ShortcutAction | null {
@@ -70,7 +69,6 @@ export function matchShortcut(combo: KeyCombo): ShortcutAction | null {
   }
   if (combo.shiftKey) {
     if (key === "s") return "save-as";
-    if (key === "l") return "toggle-layout";
     if (key === "t") return "cycle-theme";
     return null;
   }
@@ -104,7 +102,6 @@ export function menuActionFor(id: string): ShortcutAction | null {
     "toggle-edit",
     "prev-chapter",
     "next-chapter",
-    "toggle-layout",
     "cycle-theme",
     "sidebar-contents",
     "sidebar-chapters",
