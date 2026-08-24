@@ -1,10 +1,38 @@
 :root {
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color-scheme: light dark;
+  /* Explicit opaque default — the vibrancy layering below subtracts from
+     this, so nothing may rely on the webview's implicit background. */
+  background: Canvas;
 }
 
 body {
   margin: 0;
+}
+
+/* Vibrant sidebar (issue #61, macOS only): the window is transparent with
+   an NSVisualEffectView "sidebar" material behind the whole webview
+   (tauri.macos.conf.json). The material shows through wherever nothing
+   paints: html/body and the sidebar column stay transparent, while
+   .app-content paints an opaque Canvas over its region. Any stray opaque
+   background across the shell kills the effect; any missing one on
+   content makes it see-through. */
+:root[data-platform="macos"],
+:root[data-platform="macos"] body {
+  background: transparent;
+}
+
+.app-content {
+  background: Canvas;
+}
+
+/* Solid fallback when the user opts out of transparency: the OS renders
+   the material near-opaque, but keep the webview side deterministic too. */
+@media (prefers-reduced-transparency: reduce) {
+  :root[data-platform="macos"],
+  :root[data-platform="macos"] body {
+    background: Canvas;
+  }
 }
 
 #root {
@@ -24,7 +52,7 @@ body {
   --traffic-lights-inset: 0px;
 }
 
-.app-shell[data-platform="macos"] {
+:root[data-platform="macos"] .app-shell {
   --titlebar-inset: 52px;
   --traffic-lights-inset: 84px;
 }
@@ -46,7 +74,10 @@ body {
 
 /* No sidebar (no book open): the header is the window's top-left content,
    so it must clear the floating traffic lights itself. */
-.app-shell[data-platform="macos"] > .app-content:first-child > .app-header {
+:root[data-platform="macos"]
+  .app-shell
+  > .app-content:first-child
+  > .app-header {
   padding-left: var(--traffic-lights-inset);
 }
 
