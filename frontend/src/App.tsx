@@ -6,17 +6,25 @@ import { Sidebar } from "./components/Sidebar";
 import { UpdateNotice } from "./components/UpdateNotice";
 import { handleShortcutKeydown } from "./lib/shortcuts";
 import { bridgeMenuEvents } from "./lib/menu";
+import { isMacOS } from "./lib/platform";
 import "./App.css";
 
-// Main pane: tabbed sidebar (TOC + chapter panel, M2.3) + reader.
-// Keyed by book.id so per-book tab/TOC expansion state resets on open.
+// Shell body (issue #61): a full-height sidebar column on the left, with
+// the header living INSIDE the right-hand content column so the sidebar
+// runs from the window's top edge to its bottom edge (native macOS
+// source-list layout). The sidebar is keyed by book.id so per-book
+// tab/TOC expansion state resets on open.
 function MainArea() {
   const { book } = useReader();
   return (
-    <main className={book !== null ? "app-main with-toc" : "app-main"}>
+    <>
       {book !== null && <Sidebar key={book.id} />}
-      <ReaderPane />
-    </main>
+      <main className="app-content">
+        <Header />
+        <UpdateNotice />
+        <ReaderPane />
+      </main>
+    </>
   );
 }
 
@@ -35,11 +43,14 @@ function App() {
       void unlisten.then((stop) => stop());
     };
   }, []);
+  // data-platform gates the macOS overlay-titlebar insets in App.css so
+  // Windows/Linux (native titlebar) keep a zero inset.
   return (
     <ReaderProvider>
-      <div className="app-shell">
-        <Header />
-        <UpdateNotice />
+      <div
+        className="app-shell"
+        data-platform={isMacOS() ? "macos" : undefined}
+      >
         <MainArea />
       </div>
     </ReaderProvider>

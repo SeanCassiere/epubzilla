@@ -99,6 +99,10 @@ export function Sidebar() {
 
   return (
     <div className="sidebar" ref={rootRef}>
+      {/* Overlay-titlebar inset (issue #61): reserves the traffic-light
+          zone at the top of the sidebar on macOS (zero height elsewhere)
+          and doubles as a window drag handle. */}
+      <div className="titlebar-drag-zone" data-tauri-drag-region />
       {cover !== null && (
         <img
           className="sidebar-cover"
