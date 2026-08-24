@@ -8,7 +8,13 @@ import {
 import { useReader, describeError } from "../state/reader";
 import { needsUnsavedPrompt } from "../lib/editing";
 import { pickEpubFile, pickSaveEpubPath, slugifyTitle } from "../lib/dialog";
-import { destroyWindow, interceptClose, onCloseRequested } from "../lib/window";
+import {
+  beginTitlebarDrag,
+  destroyWindow,
+  interceptClose,
+  onCloseRequested,
+} from "../lib/window";
+import { isMacOS } from "../lib/platform";
 import { onShortcut } from "../lib/shortcuts";
 import { MetadataForm } from "./MetadataForm";
 import { CoverPicker } from "./CoverPicker";
@@ -201,11 +207,13 @@ export function Header() {
   const isEpub2 = book !== null && book.epub_version === "V2";
 
   return (
-    // data-tauri-drag-region: with the macOS overlay titlebar (issue #61)
-    // the header background doubles as a window drag handle. Drag only
-    // fires when the mousedown target IS the header element, so the
-    // buttons and title inside keep working normally.
-    <header className="app-header" data-tauri-drag-region>
+    // With the macOS overlay titlebar (issue #61) the whole header is the
+    // window drag surface — beginTitlebarDrag ignores mousedowns on the
+    // buttons/inputs/modals inside, so those keep working normally.
+    <header
+      className="app-header"
+      onMouseDown={isMacOS() ? beginTitlebarDrag : undefined}
+    >
       <div className="app-header-main">
         <h1 className="app-title">epubzilla</h1>
         {book !== null && (
