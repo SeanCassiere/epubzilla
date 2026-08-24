@@ -10,6 +10,7 @@ import {
   splitHref,
   tocKeyIntent,
 } from "../lib/toc";
+import { useKeepCurrentVisible } from "../lib/sidebarScroll";
 
 /**
  * Collapsible TOC tree over `Book.nav`. Section headers (href === null)
@@ -56,6 +57,12 @@ export function TocSidebar() {
   // via bubbling; stopPropagation keeps ArrowLeft/Right away from the
   // reader's chapter-nav listener while focus is in the tree.
   const treeRef = useRef<HTMLUListElement | null>(null);
+
+  // Scroll rule (issue #89, see lib/sidebarScroll.ts): keep the current
+  // entry visible with minimal movement ONLY when the chapter changes and
+  // it is outside the panel viewport; never scroll on clicks or (re)mount.
+  const scrollerRef = useRef<HTMLElement | null>(null);
+  useKeepCurrentVisible(scrollerRef, currentKey);
 
   if (book === null || book.nav.length === 0) return null;
 
@@ -121,7 +128,11 @@ export function TocSidebar() {
   };
 
   return (
-    <aside className="toc-sidebar" aria-label="Table of contents">
+    <aside
+      className="toc-sidebar"
+      aria-label="Table of contents"
+      ref={scrollerRef}
+    >
       <h2 className="toc-heading">Contents</h2>
       <ul
         className="toc-list"
@@ -201,11 +212,6 @@ function TocNode({
             data-toc-key={key}
             data-has-children={hasChildren ? "true" : "false"}
             data-expanded={expanded ? "true" : "false"}
-            ref={
-              isCurrent
-                ? (el) => el?.scrollIntoView({ block: "nearest" })
-                : undefined
-            }
             onClick={() => onNavigate(point.href as string)}
           >
             {point.label}

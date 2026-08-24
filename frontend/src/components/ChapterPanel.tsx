@@ -1,8 +1,9 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useMemo, useRef, useState, type FormEvent } from "react";
 import type { Book } from "@bindings/Book";
 import type { NavPoint } from "@bindings/NavPoint";
 import { useReader } from "../state/reader";
 import { splitHref } from "../lib/toc";
+import { useKeepCurrentVisible } from "../lib/sidebarScroll";
 
 /**
  * Chapter management panel (M2.3): the spine in order, one row per item,
@@ -28,6 +29,16 @@ export function ChapterPanel() {
     [book],
   );
 
+  // Scroll rule (issue #89, see lib/sidebarScroll.ts): same behaviour as
+  // TocSidebar — keep the current chapter visible with minimal movement
+  // ONLY when it changes and is outside the panel viewport; never scroll
+  // on clicks or (re)mount. Keyed by spine item id so reorders of other
+  // rows do not count as a chapter change.
+  const scrollerRef = useRef<HTMLElement | null>(null);
+  const currentSpineId =
+    book === null ? null : (book.spine[spineIndex]?.id ?? null);
+  useKeepCurrentVisible(scrollerRef, currentSpineId);
+
   if (book === null) return null;
   const canEdit = book.epub_version !== "V2";
 
@@ -44,7 +55,11 @@ export function ChapterPanel() {
   };
 
   return (
-    <aside className="toc-sidebar chapter-panel" aria-label="Chapters">
+    <aside
+      className="toc-sidebar chapter-panel"
+      aria-label="Chapters"
+      ref={scrollerRef}
+    >
       <h2 className="toc-heading">Chapters</h2>
       <ol className="toc-list chapter-list">
         {book.spine.map((item, i) => {
