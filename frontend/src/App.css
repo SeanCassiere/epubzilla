@@ -184,11 +184,41 @@ body {
    Full-height left column since issue #61. */
 .sidebar {
   flex: none;
-  width: 17rem;
+  width: var(--sidebar-width, 17rem);
   display: flex;
   flex-direction: column;
   min-height: 0;
   border-right: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+}
+
+/* Sidebar/content divider (issue #61, Stage 3): a 9px hit area straddling
+   the sidebar's hairline border (negative margins keep the visual layout
+   unchanged). Never inside a data-tauri-drag-region, and well inboard of
+   the window edge so the OS resize zone can't steal the gesture. */
+.sidebar-resize-handle {
+  flex: none;
+  width: 9px;
+  margin-left: -5px;
+  margin-right: -4px;
+  z-index: 2;
+  cursor: col-resize;
+  align-self: stretch;
+}
+
+.sidebar-resize-handle:focus-visible {
+  outline: none;
+  background: color-mix(in srgb, currentColor 25%, transparent);
+}
+
+/* During a drag: keep the resize cursor everywhere, stop text selection,
+   and cut the reader iframe's pointer events so it can't swallow moves. */
+body.sidebar-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.sidebar-resizing .chapter-frame {
+  pointer-events: none;
 }
 
 /* Focus wrapper around the active panel (issue #74): the Mod+1/2/3
