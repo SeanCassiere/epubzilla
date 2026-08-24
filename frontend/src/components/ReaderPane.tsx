@@ -11,15 +11,17 @@ import {
 } from "../lib/theme";
 import {
   MODE_STORAGE_KEY,
-  offsetForPage,
-  pageAtOffset,
-  pageCount,
-  pageStep,
   parseReadingMode,
   readingModeLabel,
   toggleReadingMode,
   type ReadingMode,
 } from "../lib/readingMode";
+import {
+  applyPage,
+  currentPage,
+  measurePageGeometry,
+  pageForElement,
+} from "../lib/paginator";
 import { shouldHandleNavKey } from "../lib/toc";
 import { handleChapterClick } from "../lib/chapterClick";
 import { handleShortcutKeydown, onShortcut } from "../lib/shortcuts";
@@ -102,27 +104,6 @@ function useReadingMode(): [ReadingMode, () => void] {
 }
 
 /**
- * Measures the paginated iframe body's page geometry (issue #75): one
- * page is one overflow column, so the step between page left edges is
- * the body's content-box width plus the column gap, and the page count
- * follows from the scrollable range. Returns null when the document has
- * no usable layout yet (e.g. zero-width during load).
- */
-function measurePages(
-  body: HTMLElement,
-  win: Window,
-): { step: number; count: number } | null {
-  const style = win.getComputedStyle(body);
-  const gap = Number.parseFloat(style.columnGap) || 0;
-  const padLeft = Number.parseFloat(style.paddingLeft) || 0;
-  const padRight = Number.parseFloat(style.paddingRight) || 0;
-  const contentWidth = body.clientWidth - padLeft - padRight;
-  if (contentWidth <= 0) return null;
-  const step = pageStep(contentWidth, gap);
-  return { step, count: pageCount(body.scrollWidth, body.clientWidth, step) };
-}
-
-/**
  * The reading surface: current chapter in a sandboxed iframe plus spine
  * navigation (previous/next, position, ArrowLeft/ArrowRight shortcuts).
  *
@@ -186,8 +167,9 @@ export function ReaderPane() {
 
   // Reading mode (issue #75): scrolled is the historical default;
   // paginated injects the multicol render layer into the srcdoc and the
-  // parent drives page turns via body.scrollLeft. Like theming this is
-  // presentation-only — stored EPUB content is never touched.
+  // parent drives page turns by translating the pagination wrapper (see
+  // lib/paginator.ts, issue #88). Like theming this is presentation-only
+  // — stored EPUB content is never touched.
   const [readingMode, toggleMode] = useReadingMode();
   const modeRef = useRef(readingMode);
   modeRef.current = readingMode;
@@ -220,14 +202,10 @@ export function ReaderPane() {
    */
   const turnPage = useCallback((delta: 1 | -1) => {
     const doc = frameRef.current?.contentDocument;
-    const body = doc?.body;
-    const win = doc?.defaultView;
-    if (body === null || body === undefined || win === null || win === undefined) {
-      return;
-    }
-    const pages = measurePages(body, win);
+    if (doc === null || doc === undefined) return;
+    const pages = measurePageGeometry(doc);
     if (pages === null) return;
-    const target = pageAtOffset(body.scrollLeft, pages.step) + delta;
+    const target = currentPage(doc) + delta;
     if (target < 0) {
       openAtEndRef.current = true;
       void actionsRef.current.previousChapter();
@@ -237,7 +215,7 @@ export function ReaderPane() {
       void actionsRef.current.nextChapter();
       return;
     }
-    body.scrollLeft = offsetForPage(target, pages.step, pages.count);
+    applyPage(doc, target, pages);
   }, []);
 
   /**
@@ -271,29 +249,16 @@ export function ReaderPane() {
         : (doc.getElementById(target) ??
           doc.querySelector(`a[name="${CSS.escape(target)}"]`));
     if (modeRef.current === "paginated") {
-      const body = doc.body;
-      const win = doc.defaultView;
-      if (body === null || win === null) return;
-      const pages = measurePages(body, win);
+      const pages = measurePageGeometry(doc);
       if (pages === null) return;
       if (el !== null) {
-        // Page index from the element's horizontal offset within the
-        // body's content box (columns start at multiples of the step).
-        const contentLeft =
-          body.getBoundingClientRect().left +
-          (Number.parseFloat(win.getComputedStyle(body).paddingLeft) || 0);
-        const x =
-          el.getBoundingClientRect().left - contentLeft + body.scrollLeft;
-        body.scrollLeft = offsetForPage(
-          Math.floor(x / pages.step),
-          pages.step,
-          pages.count,
-        );
+        // Page of the column containing the fragment target (columns
+        // start at multiples of the step within the wrapper).
+        const page = pageForElement(doc, el);
+        if (page !== null) applyPage(doc, page, pages);
         return;
       }
-      body.scrollLeft = openAtEndRef.current
-        ? offsetForPage(pages.count - 1, pages.step, pages.count)
-        : 0;
+      applyPage(doc, openAtEndRef.current ? pages.count - 1 : 0, pages);
       return;
     }
     if (el !== null) {
@@ -424,18 +389,11 @@ export function ReaderPane() {
     if (readingMode !== "paginated") return;
     const onResize = () => {
       const doc = frameRef.current?.contentDocument;
-      const body = doc?.body;
-      const win = doc?.defaultView;
-      if (body === null || body === undefined || win === null || win === undefined) {
-        return;
-      }
-      const pages = measurePages(body, win);
-      if (pages === null) return;
-      body.scrollLeft = offsetForPage(
-        pageAtOffset(body.scrollLeft, pages.step),
-        pages.step,
-        pages.count,
-      );
+      if (doc === null || doc === undefined) return;
+      // Re-apply the current page index under the re-measured geometry:
+      // the reflow changed the step (and possibly the count), so the
+      // translation is recomputed and the index re-clamped.
+      applyPage(doc, currentPage(doc));
     };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);

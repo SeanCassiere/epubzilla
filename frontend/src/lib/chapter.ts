@@ -235,19 +235,46 @@ ${CHAPTER_BASE_CSS}
 `.trim();
 
 /**
- * Paginated reading mode (issue #75): the body becomes a single-column
+ * Marker attribute of the pagination wrapper: the single-column multicol
+ * container the chapter content is moved into in paginated mode. The
+ * parent (ReaderPane, via lib/paginator.ts) turns pages by translating
+ * this element horizontally.
+ */
+export const PAGINATOR_ATTR = "data-epubzilla-paginator";
+
+/**
+ * Marker attribute of the zero-height sentinel appended after the last
+ * piece of chapter content inside the wrapper. Its layout position (via
+ * getBoundingClientRect) marks the horizontal end of the fragmented
+ * content, which is how the parent derives the page count.
+ */
+export const SENTINEL_ATTR = "data-epubzilla-sentinel";
+
+/**
+ * Paginated reading mode (issue #75, reworked for #88): the chapter
+ * content is moved into a wrapper element that becomes a single-column
  * CSS multicol container pinned to the viewport height, so overflowing
  * content fragments into horizontal overflow columns — one column per
- * page, each exactly the body's content-box width. The parent (ReaderPane)
- * turns pages by setting `body.scrollLeft` in steps of content width +
- * column gap; `overflow: hidden` clips the neighboring pages while still
- * allowing programmatic scrolling. No scripts run inside the sandboxed
- * iframe — geometry is measured and driven entirely from the parent.
+ * page, each exactly the wrapper's width (the body's content box). The
+ * body clips (`overflow: hidden`) and the parent (ReaderPane, via
+ * lib/paginator.ts) turns pages by translating the wrapper with a CSS
+ * transform in steps of column width + column gap.
+ *
+ * Why a transformed wrapper instead of scrolling the body (issue #88):
+ * WebKit (the Tauri webview) clips a multicol container's overflow
+ * columns but does not reliably expose them through the container's own
+ * scrollWidth/scrollLeft — the measured page count collapsed to 1 in the
+ * real app and the first page turn skipped to the next chapter. A CSS
+ * transform plus getBoundingClientRect-based measurement (see the
+ * sentinel above) uses only geometry every engine reports from real
+ * layout, with no dependence on scroll-overflow propagation. No scripts
+ * run inside the sandboxed iframe — geometry is measured and driven
+ * entirely from the parent.
  *
  * Composition with the other injected defaults:
  * - The #55 reading measure (max-width cap + centered margins on body)
- *   is untouched — the multicol content box IS the measure, so each page
- *   is one comfortable column of text.
+ *   is untouched — the wrapper fills the body's content box, so each
+ *   page is one comfortable column of text.
  * - The #66/#78 color-scheme pins are untouched — pagination sets layout
  *   properties only, never colors, so light/dark/auto themes compose.
  * - Unlike the low-priority defaults, this block is appended LAST in
@@ -255,8 +282,8 @@ ${CHAPTER_BASE_CSS}
  *   specificity it wins over book CSS for the layout properties it sets
  *   (author colors and typography still apply within each page).
  *
- * Presentation-only: injected into the rendered srcdoc at display time,
- * never persisted into the EPUB.
+ * Presentation-only: the wrapper, sentinel, and CSS are injected into the
+ * rendered srcdoc at display time, never persisted into the EPUB.
  */
 export const PAGINATED_CHAPTER_CSS = `
 html {
@@ -269,11 +296,20 @@ body {
   overflow: hidden;
   margin-block: 0;
   padding: 2rem 1.5rem;
+}
+[${PAGINATOR_ATTR}] {
+  height: 100%;
   column-count: 1;
   column-gap: 3rem;
   column-fill: auto;
   orphans: 2;
   widows: 2;
+}
+[${SENTINEL_ATTR}] {
+  display: block;
+  block-size: 0;
+  margin: 0;
+  padding: 0;
 }
 img, svg, video {
   break-inside: avoid;
@@ -354,6 +390,24 @@ export function prepareChapterHtml(
     // Appended last: the user's explicit layout choice outranks book CSS
     // at equal specificity (see PAGINATED_CHAPTER_CSS).
     head.appendChild(pagination);
+
+    // Move the chapter content into the pagination wrapper (the multicol
+    // container the parent translates for page turns) and append the
+    // end-of-content sentinel used to measure the page count. Render-layer
+    // only — the stored EPUB markup is never modified. Tradeoff: author
+    // selectors keyed on `body >` no longer match in paginated mode; the
+    // alternative (multicol directly on body) cannot be paged reliably in
+    // WebKit (issue #88).
+    const body = doc.body;
+    const wrapper = doc.createElement("div");
+    wrapper.setAttribute(PAGINATOR_ATTR, "");
+    while (body.firstChild !== null) {
+      wrapper.appendChild(body.firstChild);
+    }
+    const sentinel = doc.createElement("span");
+    sentinel.setAttribute(SENTINEL_ATTR, "");
+    wrapper.appendChild(sentinel);
+    body.appendChild(wrapper);
   }
 
   return "<!doctype html>\n" + (doc.documentElement?.outerHTML ?? "");
