@@ -91,6 +91,13 @@ jobs:
       # This is the final gate while releases have one active target. When
       # parallel platform jobs return, move it to a needs: build job so it
       # observes the complete, merged manifest from every target.
+      #
+      # tauri-action v1 writes two manifest keys per target (`darwin-aarch64`
+      # and the bundle-qualified `darwin-aarch64-app`) and points both at the
+      # asset API URL (api.github.com/.../releases/assets/<id>) rather than
+      # the browser download URL — the API URL exists while the release is
+      # still a draft, and tauri-plugin-updater downloads with
+      # `Accept: application/octet-stream`, which makes it serve the binary.
       - name: Inspect updater manifest before draft review
         env:
           GH_TOKEN: ${{ github.token }}
@@ -107,9 +114,11 @@ jobs:
             || { echo "::error::updater signature is missing"; exit 1; }
           gh release download "$RELEASE_TAG" --pattern latest.json --dir updater-inspection
           jq -e --arg version "${RELEASE_TAG#v}" '.version == $version' updater-inspection/latest.json
-          jq -e --arg tag "$RELEASE_TAG" '
-            (.platforms | length) == 1 and
+          updater_asset_urls="$(gh release view "$RELEASE_TAG" --json assets \
+            --jq '[.assets[] | select(.name | endswith(".app.tar.gz")) | .apiUrl]')"
+          jq -e --argjson urls "$updater_asset_urls" '
+            (.platforms | keys | sort) == ["darwin-aarch64", "darwin-aarch64-app"] and
             (all(.platforms[];
-              (.url | contains("/download/" + $tag + "/")) and
+              (.url as $u | $urls | index($u) != null) and
               (.signature | type == "string" and length > 0)))
           ' updater-inspection/latest.json
