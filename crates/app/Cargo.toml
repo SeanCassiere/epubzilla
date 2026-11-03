@@ -26,4 +26,4 @@ tauri-plugin-opener = "=2.5.4"
 
 [dev-dependencies]
 # Fixture generation for the frontend integration harness (tests/gen_fixtures.rs).
-zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }

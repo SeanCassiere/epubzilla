@@ -13,7 +13,7 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 time = { version = "0.3", default-features = false, features = ["std", "formatting"] }
 ts-rs = { workspace = true }
-zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 serde_json = { workspace = true }
