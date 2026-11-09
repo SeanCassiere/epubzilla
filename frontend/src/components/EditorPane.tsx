@@ -19,7 +19,6 @@ import { useReader, describeError } from "../state/reader";
 import * as api from "../lib/api";
 import {
   imageMarkdown,
-  promptImageAlt,
   relativeResourcePath,
   type InsertImage,
 } from "../lib/editing";
@@ -27,6 +26,7 @@ import { resolveChapterUrl } from "../lib/chapter";
 import { pickImageFile } from "../lib/dialog";
 import { CodeEditor } from "./CodeEditor";
 import { MilkdownEditor, type PastedImage } from "./MilkdownEditor";
+import { useTextPrompt } from "./PromptDialog";
 
 type PendingLeave = { resolve: (proceed: boolean) => void } | null;
 
@@ -53,6 +53,7 @@ function storeMode(mode: MarkdownMode) {
 }
 
 export function EditorPane() {
+  const { promptImageAlt, dialog } = useTextPrompt();
   const {
     book,
     spineIndex,
@@ -201,7 +202,7 @@ export function EditorPane() {
     if (book === null || resourceId === null) return;
     const osPath = await pickImageFile();
     if (osPath === null) return;
-    const alt = promptImageAlt();
+    const alt = await promptImageAlt();
     if (alt === null) return;
     const known = new Set(book.resources.map((r) => r.id));
     const updated = await addResource(osPath);
@@ -219,7 +220,7 @@ export function EditorPane() {
           : `${current}\n\n${imageMarkdown(reference, alt)}\n`,
       );
     }
-  }, [book, resourceId, addResource, referenceForAdded]);
+  }, [book, resourceId, addResource, referenceForAdded, promptImageAlt]);
 
   // Clipboard paste / drag-and-drop images (#54): persist the bytes as a
   // book resource (add_resource_from_bytes) and hand the WYSIWYG surface
@@ -332,6 +333,7 @@ export function EditorPane() {
           insertImageRef={format === "Markdown" ? insertImageRef : undefined}
         />
       )}
+      {dialog}
       {pendingLeave !== null && (
         <div className="modal-overlay">
           <div className="modal" role="dialog" aria-label="Unapplied changes">

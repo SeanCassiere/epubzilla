@@ -54,10 +54,6 @@ export function relativeResourcePath(fromPath: string, toPath: string): string {
 /** Shared cursor insertion contract; an empty alt describes decoration. */
 export type InsertImage = (src: string, alt?: string) => void;
 
-export function promptImageAlt(): string | null {
-  return window.prompt("Image alt text (leave empty for a decorative image):", "");
-}
-
 /** Keep labels literal and destinations intact through CommonMark parsing. */
 export function imageMarkdown(relativePath: string, alt = ""): string {
   const label = alt.replace(/\r?\n/g, " ").replace(/[\\[\]`*_~&<>]/g, "\\$&");
