@@ -114,6 +114,8 @@ interface Backend {
   chapterDelayMs: number;
   /** save_book waits on this when set (consumed once). */
   saveGate: Promise<void> | null;
+  /** update_metadata waits on this when set (consumed once). */
+  metadataGate: Promise<void> | null;
   saveError: unknown;
   createError: unknown;
   /** Book served for opens; defaults to the EPUB 3 fixture. */
@@ -136,6 +138,7 @@ function mockBackend(): Backend {
     chapterGate: null,
     chapterDelayMs: 0,
     saveGate: null,
+    metadataGate: null,
     saveError: null,
     createError: null,
     fixture: "epub3",
@@ -222,6 +225,11 @@ function mockBackend(): Backend {
           };
         }
         case "update_metadata": {
+          if (backend.metadataGate !== null) {
+            const gate = backend.metadataGate;
+            backend.metadataGate = null;
+            await gate;
+          }
           const book = {
             ...current(),
             metadata: args.metadata as Metadata,
@@ -1330,6 +1338,56 @@ describe("edits during a pending lifecycle operation", () => {
       writes.map((c) => (c.args.content as { content: string }).content),
     ).toEqual(["first", "second"]);
     expect(count(backend, "save_book")).toBe(2);
+  });
+
+  /** Save metadata with update_metadata held until the returned gate opens. */
+  async function pendingMetadataSave(backend: Backend): Promise<Deferred<void>> {
+    const gate = deferred<void>();
+    backend.metadataGate = gate.promise;
+    fireEvent.click(screen.getByRole("button", { name: "Edit metadata…" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Title" }), {
+      target: { value: "pending title" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save metadata" }));
+    await waitFor(() => expect(count(backend, "update_metadata")).toBe(1));
+    return gate;
+  }
+
+  it("Quit while a metadata save is in flight guards the book it leaves dirty", async () => {
+    const backend = mockBackend();
+    await mount(backend);
+    await openFromWelcome(backend, ALPHA);
+    const gate = await pendingMetadataSave(backend);
+
+    await act(() => emit("app-quit-requested", 1));
+    expect(count(backend, "quit_app")).toBe(0);
+    // Resolved outside act(): the guard must not depend on React having
+    // committed the returned (dirty) book.
+    gate.resolve();
+    const guard = await findSheet();
+    expect(count(backend, "quit_app")).toBe(0);
+    fireEvent.click(within(guard).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(count(backend, "quit_app")).toBe(1));
+    expect(count(backend, "save_book")).toBe(1);
+  });
+
+  it("Close Book while a metadata save is in flight guards the book it leaves dirty", async () => {
+    const backend = mockBackend();
+    await mount(backend);
+    await openFromWelcome(backend, ALPHA);
+    const gate = await pendingMetadataSave(backend);
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    await act(() => emit("app-menu", "close-book"));
+    expect(count(backend, "close_book")).toBe(0);
+    gate.resolve();
+    const guard = await findSheet();
+    expect(count(backend, "close_book")).toBe(0);
+    fireEvent.click(within(guard).getByRole("button", { name: "Cancel" }));
+    await idle();
+    expect(count(backend, "close_book")).toBe(0);
+    screen.getByText("pending title");
   });
 
   it("chapter management and metadata are refused while frozen", async () => {
