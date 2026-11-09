@@ -13,6 +13,7 @@ import { EditorPane } from "../components/EditorPane";
 import * as api from "../lib/api";
 import { pickImageFile } from "../lib/dialog";
 import { MilkdownEditor } from "../components/MilkdownEditor";
+import { richModeUnavailableReason } from "../lib/rich-mode";
 
 const reader = vi.hoisted(() => ({
   book: { id: "book-1", spine: [{ resource: "ch1" }], resources: [{ id: "ch1", path: "OEBPS/text/ch1.xhtml" }] },
@@ -49,6 +50,12 @@ const corpus: Record<string, string> = {
   "review-authored-nested-empty": "- <br />\n\n  > Quote\n\n> [!NOTE]\n>\n> <br />\n\nNote[^empty].\n\n[^empty]: <br />\n",
   "review-setext-attributes": "> [!NOTE]\n> **Title** {#chapter_one .some_class}\n> ---\n\nOther {#a&copy;}\n===\n",
   "review-nested-attributes": "> ## **Title** {#my_id .some_class}\n\n- ## Other {#a&copy;}\n",
+  "review-title-breaks": '[link](x "one&#10;&#10;two") ![alt](x "one&#10;&#10;two")\n\n[CR](x "one&#13;two") ![CRLF](x "one&#13;&#10;two")\n',
+  "review-title-escaping": '[link](x "quote&#34;&#10;slash&#92;&#10;literal &#38;#10;") ![alt](x "quote&#34;&#13;slash&#92;&#13;literal &#38;#13;")\n',
+  "review-tight-empty-item": "- a\n- <br />\n",
+  "review-footnote-spaces": "A[^my note]\n\n[^my note]: Second.\n",
+  "review-footnote-short-spaces": "A[^a b].\n\n[^a b]: Note.\n",
+  "review-footnote-punctuation": "A[^a&b].\n\n[^a&b]: Note.\n",
 
   "016-heading-id": "## T {#id .c}\n\n### Other {#other}\n",
   "017-link-image-title": '[t](https://example.org/a?q=1&b=2#x "T")\n\n[next](../text/ch02.xhtml#x "Next") [local](#id) [mail](mailto:a@b.c)\n\n![a](../images/a.png "Picture")\n',
@@ -65,7 +72,7 @@ const corpus: Record<string, string> = {
 // Read the shared core fixtures too. New C1 fixtures join this corpus when
 // the branches are combined; the cases above keep C2 independently testable.
 const fixtures = import.meta.glob<string>(
-  "../../../crates/core/tests/fixtures/roundtrip/*.md",
+  "../../../crates/core/tests/fixtures/roundtrip/**/*.md",
   { query: "?raw", import: "default", eager: true },
 );
 
@@ -79,9 +86,18 @@ async function mount(value: string, onChange = vi.fn()) {
 function assertConstructs(name: string, out: string, original: string) {
   // Existing literal escapes are content. Only newly introduced escapes
   // would demote supported syntax (including in future shared C1 fixtures).
-  for (const pattern of [/\\\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/g, /\\\{#/g, /\\\[x\]/g]) {
+  for (const pattern of [/\\\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/g, /\\\{#/g, /\\\[x\]/g, /\\\[\^/g]) {
     expect(out.match(pattern)?.length ?? 0).toBeLessThanOrEqual(original.match(pattern)?.length ?? 0);
   }
+  if (name === "review-title-breaks") {
+    expect(out).toContain('[link](x "one&#10;&#10;two")');
+    expect(out).toContain('![alt](x "one&#10;&#10;two")');
+    expect(out).toContain('[CR](x "one&#13;two")');
+    expect(out).toContain('![CRLF](x "one&#13;&#10;two")');
+    expect(document.querySelector('.milkdown-host a[href="x"]')?.getAttribute("title")).toBe("one\n\ntwo");
+    expect(document.querySelector('.milkdown-host img[src="x"]')?.getAttribute("title")).toBe("one\n\ntwo");
+  }
+  if (name === "review-tight-empty-item") expect(out).toMatch(/\* a\n\* <br \/>/);
   if (name === "review-attributes") {
     for (const literal of ["{#chapter_one .some_class}", "{#a*b}", "{#a&copy;}", "{.lead_x}"]) expect(out).toContain(literal);
   }
@@ -163,6 +179,33 @@ function assertConstructs(name: string, out: string, original: string) {
 
 describe("conversion parity", () => {
   it.each(Object.entries({ ...fixtures, ...corpus }))("preserves %s after an unrelated edit and reaches a fixed point", async (name, markdown) => {
+    // These must be exercised through the real pane: refusing rich mode is
+    // part of the parity contract, not an excuse to skip legacy fixtures.
+    const sourceOnly = name.startsWith("review-footnote-") ||
+      name.endsWith("/028-encoded-footnote-labels.md") ||
+      name.endsWith("/read/legacy-footnote-labels.md");
+    if (sourceOnly) {
+      expect(richModeUnavailableReason(markdown)).not.toBeNull();
+      vi.mocked(api.readChapter).mockResolvedValue({ resource: "ch1", format: "Markdown", content: markdown });
+      render(<EditorPane />);
+      await waitFor(() => expect(document.querySelector(".cm-editor")).not.toBeNull());
+      expect(screen.getByRole("status").textContent).toContain("footnote labels");
+      const richButton = screen.getByRole("button", { name: "WYSIWYG" }) as HTMLButtonElement;
+      expect(richButton.disabled).toBe(true);
+      expect(screen.getByRole("button", { name: "Markdown" }).getAttribute("aria-pressed")).toBe("true");
+      expect((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled).toBe(true);
+      const view = EditorView.findFromDOM(document.querySelector(".cm-editor")! as HTMLElement)!;
+      expect(view.state.doc.toString()).toBe(markdown);
+      const prefix = "Unrelated edit.\n\n";
+      act(() => view.dispatch({ changes: { from: 0, insert: prefix } }));
+      fireEvent.click(richButton);
+      expect(document.querySelector(".milkdown-host")).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+      await waitFor(() => expect(reader.writeChapter).toHaveBeenCalledWith({ resource: "ch1", format: "Markdown", content: prefix + markdown }));
+      assertConstructs(name, view.state.doc.toString(), markdown);
+      return;
+    }
+    expect(richModeUnavailableReason(markdown)).toBeNull();
     const { editor, onChange } = await mount(markdown);
     // Allow the debounced listener to run: mounting must never dirty a buffer.
     await new Promise((resolve) => setTimeout(resolve, 250));
@@ -230,6 +273,31 @@ describe("rich representations", () => {
 });
 
 describe("real editor mode switching", () => {
+  it("rechecks source edits before allowing WYSIWYG", async () => {
+    vi.mocked(api.readChapter).mockResolvedValue({ resource: "ch1", format: "Markdown", content: "A[^my note].\n\n[^my note]: Note.\n" });
+    render(<EditorPane />);
+    await waitFor(() => expect(document.querySelector(".cm-editor")).not.toBeNull());
+    const view = EditorView.findFromDOM(document.querySelector(".cm-editor")! as HTMLElement)!;
+    const richButton = screen.getByRole("button", { name: "WYSIWYG" }) as HTMLButtonElement;
+    expect(richButton.disabled).toBe(true);
+    const safe = "A[^note].\n\n[^note]: Note.\n";
+    act(() => view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: safe } }));
+    expect(richButton.disabled).toBe(false);
+    expect(document.querySelector(".milkdown-host")).toBeNull();
+    expect(screen.queryByText(/footnote labels with spaces/)).toBeNull();
+    const unsafe = "A[^a&b].\n\n[^a&b]: Note.\n";
+    act(() => view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: unsafe } }));
+    expect(richButton.disabled).toBe(true);
+    fireEvent.click(richButton);
+    expect(view.state.doc.toString()).toBe(unsafe);
+    act(() => view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: safe } }));
+    fireEvent.click(richButton);
+    await waitFor(() => expect(document.querySelector(".milkdown-host .ProseMirror")).not.toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Markdown" }));
+    const returned = EditorView.findFromDOM(document.querySelector(".cm-editor")! as HTMLElement)!;
+    expect(returned.state.doc.toString()).toBe(safe);
+  });
+
   it("flushes a pending rich edit when switching away before the listener debounce", async () => {
     const { editor, onChange, unmount } = await mount("Before.\n");
     editor.action((ctx) => {
@@ -242,7 +310,7 @@ describe("real editor mode switching", () => {
   });
 
   it.each(["wysiwyg", "source"])("preserves the exact clean and edited buffer starting in %s", async (mode) => {
-    const original = Object.values(corpus).join("\n");
+    const original = Object.entries(corpus).filter(([name]) => !name.startsWith("review-footnote-")).map(([, value]) => value).join("\n");
     vi.mocked(api.readChapter).mockResolvedValue({ resource: "ch1", format: "Markdown", content: original });
     sessionStorage.setItem("epubzilla.editor.markdownMode", mode);
     render(<EditorPane />);
