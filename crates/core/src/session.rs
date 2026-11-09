@@ -1244,12 +1244,43 @@ fn splice_body(doc: &str, span: std::ops::Range<usize>, body: &str) -> String {
         out.push('\n');
     }
     out.push_str(&doc[span.end..]);
-    if body.contains("epub:") && !out.contains("xmlns:epub") {
-        if let Some(i) = out.find("<html") {
-            out.insert_str(
-                i + "<html".len(),
-                r#" xmlns:epub="http://www.idpf.org/2007/ops""#,
-            );
+    if body.contains("epub:") {
+        let mut reader = Reader::from_str(&out);
+        // Only the document element's declaration is in scope throughout the
+        // generated body. Text, comments and declarations on descendants are not.
+        loop {
+            let start = reader.buffer_position() as usize;
+            match reader.read_event() {
+                Ok(XmlEvent::Start(root)) | Ok(XmlEvent::Empty(root)) => {
+                    if root.local_name().as_ref() != "html" {
+                        break;
+                    }
+                    let declared = root.attributes().flatten().any(|attr| {
+                        attr.key.as_ref() == "xmlns:epub"
+                            && attr
+                                .normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                                .is_ok_and(|value| value == "http://www.idpf.org/2007/ops")
+                    });
+                    if !declared {
+                        let end = reader.buffer_position() as usize;
+                        let attrs: Vec<_> = root
+                            .attributes()
+                            .flatten()
+                            .filter(|attr| attr.key.as_ref() != "xmlns:epub")
+                            .collect();
+                        let mut replacement_root = root.to_owned();
+                        replacement_root.clear_attributes();
+                        replacement_root.extend_attributes(attrs);
+                        let mut root = replacement_root;
+                        root.push_attribute(("xmlns:epub", "http://www.idpf.org/2007/ops"));
+                        let replacement = format!("<{}>", root.as_ref());
+                        out.replace_range(start..end, &replacement);
+                    }
+                    break;
+                }
+                Ok(XmlEvent::Eof) | Err(_) => break,
+                _ => {}
+            }
         }
     }
     out
@@ -1507,6 +1538,52 @@ mod tests {
     use super::*;
     use std::io::Write;
     use zip::write::SimpleFileOptions;
+
+    #[test]
+    fn splice_declares_epub_on_the_real_root() {
+        use quick_xml::name::{Namespace, ResolveResult};
+        const EPUB: &str = "http://www.idpf.org/2007/ops";
+        let body = roundtrip::markdown_to_xhtml("`xmlns:epub`\n\n> [!NOTE]\n> Body.\n");
+        for (root_attrs, head) in [
+            ("", "<title>xmlns:epub</title>"),
+            (
+                "",
+                "<title xmlns:epub='http://www.idpf.org/2007/ops'>Title</title>",
+            ),
+            (
+                "xmlns:epub='http://www.idpf.org/2007/ops'",
+                "<title>Title</title>",
+            ),
+            ("xmlns:epub='urn:wrong'", "<title>Title</title>"),
+        ] {
+            let doc = format!("<?xml version='1.0'?><!-- <html xmlns:epub='fake'> --><html xmlns='http://www.w3.org/1999/xhtml' {root_attrs}><head>{head}</head><body><p>Old.</p></body></html>");
+            let result = splice_body(&doc, body_span(&doc).unwrap(), &body);
+            assert!(result.contains(head));
+            assert!(result.starts_with("<?xml version='1.0'?><!-- <html xmlns:epub='fake'> -->"));
+            let mut reader = quick_xml::NsReader::from_str(&result);
+            let mut found = false;
+            loop {
+                match reader.read_event().unwrap() {
+                    XmlEvent::Start(el) | XmlEvent::Empty(el) => {
+                        for attr in el.attributes().map(Result::unwrap) {
+                            if attr.key.as_ref() == "epub:type" {
+                                let (namespace, _) = reader.resolver().resolve_attribute(attr.key);
+                                assert_eq!(namespace, ResolveResult::Bound(Namespace(EPUB)));
+                                found = true;
+                            }
+                        }
+                    }
+                    XmlEvent::Eof => break,
+                    _ => {}
+                }
+            }
+            assert!(found);
+            assert_eq!(
+                splice_body(&result, body_span(&result).unwrap(), &body),
+                result
+            );
+        }
+    }
 
     const CONTAINER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">

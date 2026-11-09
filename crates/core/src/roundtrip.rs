@@ -27,6 +27,7 @@ use pulldown_cmark::{
 };
 use quick_xml::events::Event as XmlEvent;
 use quick_xml::Reader;
+use unicase::UniCase;
 
 use crate::error::{CoreError, CoreResult};
 
@@ -45,7 +46,43 @@ pub fn markdown_to_xhtml(md: &str) -> String {
     options.insert(Options::ENABLE_GFM);
     options.insert(Options::ENABLE_TASKLISTS);
     let md: String = md.chars().filter(|c| xml_char(*c)).collect();
+    let md = preserve_heading_text(&md, options);
     let events: Vec<_> = Parser::new_ext(&md, options).collect();
+    // Use the parser's case-insensitive identity, retaining the first definition's
+    // spelling. Discard duplicate definitions *before* processing their contents.
+    let mut labels = HashMap::new();
+    for event in &events {
+        if let Event::Start(Tag::FootnoteDefinition(name)) = event {
+            labels
+                .entry(UniCase::new(name.to_string()))
+                .or_insert_with(|| footnote_token(name));
+        }
+    }
+    let mut seen = HashSet::new();
+    let mut skipping = false;
+    let events: Vec<_> = events
+        .into_iter()
+        .filter_map(|event| {
+            if let Event::Start(Tag::FootnoteDefinition(name)) = &event {
+                skipping = !seen.insert(UniCase::new(name.to_string()));
+            }
+            if skipping {
+                if matches!(event, Event::End(TagEnd::FootnoteDefinition)) {
+                    skipping = false;
+                }
+                return None;
+            }
+            Some(match event {
+                Event::FootnoteReference(name) => {
+                    Event::FootnoteReference(labels[&UniCase::new(name.to_string())].clone().into())
+                }
+                Event::Start(Tag::FootnoteDefinition(name)) => Event::Start(
+                    Tag::FootnoteDefinition(labels[&UniCase::new(name.to_string())].clone().into()),
+                ),
+                event => event,
+            })
+        })
+        .collect();
     let mut w = XhtmlWriter::default();
     // Reserve derived footnote ids before assigning user-authored heading ids.
     let mut counts = HashMap::<String, usize>::new();
@@ -252,7 +289,9 @@ impl XhtmlWriter {
             }
             Tag::BlockQuote(Some(kind)) => {
                 let (name, epub_type, role, title) = alert_signature(kind);
-                self.pending_class = None;
+                if let Some(class) = self.pending_class.take() {
+                    self.write_block(&format!("<p>{{.{}}}</p>\n", esc_text(&class)));
+                }
                 self.sink().push_str(&format!(
                     "<aside class=\"alert alert-{name}\" epub:type=\"{epub_type}\" role=\"{role}\">\n<p class=\"alert-title\">{title}</p>\n"
                 ));
@@ -450,6 +489,79 @@ impl XhtmlWriter {
     }
 }
 
+/// Keep ordinary labels readable; encode every byte of other labels. Reserving
+/// the prefix makes this injective ("a b" and an authored "z-612062" differ).
+fn footnote_token(label: &str) -> String {
+    if !label.starts_with("z-")
+        && label
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+    {
+        label.to_string()
+    } else {
+        let hex: String = label.bytes().map(|b| format!("{b:02x}")).collect();
+        format!("z-{hex}")
+    }
+}
+
+fn read_footnote_label(el: &Elem, token: &str) -> CoreResult<String> {
+    // Old chapters used the label verbatim, even when it was not a legal id.
+    if el.attr("role").is_none() || !token.starts_with("z-") {
+        return Ok(token.to_string());
+    }
+    let hex = &token[2..];
+    let bytes = hex
+        .as_bytes()
+        .chunks(2)
+        .map(|pair| {
+            let pair = std::str::from_utf8(pair).ok()?;
+            (pair.len() == 2)
+                .then(|| u8::from_str_radix(pair, 16).ok())
+                .flatten()
+        })
+        .collect::<Option<Vec<_>>>();
+    let label = bytes
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .filter(|label| footnote_token(label) == token && footnote_label(label))
+        .ok_or_else(|| lossy("invalid encoded footnote label"))?;
+    Ok(label)
+}
+
+/// Pulldown consumes arbitrary trailing {...} as attributes. Only opt into
+/// that interpretation for our supported #id/.class syntax. An entity for the
+/// closing brace preserves all original text without affecting other blocks.
+fn preserve_heading_text(md: &str, options: Options) -> String {
+    let mut closing_braces = Vec::new();
+    for (event, range) in Parser::new_ext(md, options).into_offset_iter() {
+        if !matches!(event, Event::Start(Tag::Heading { attrs, .. }) if !attrs.is_empty()) {
+            continue;
+        }
+        let source = &md[range.clone()];
+        let Some(close) = source.rfind('}') else {
+            continue;
+        };
+        let Some(open) = source[..close].rfind('{') else {
+            continue;
+        };
+        let inside = &source[open + 1..close];
+        if !inside.contains(['{', '\\', '<', '>', '\n', '\r']) && !heading_attributes(inside) {
+            closing_braces.push(range.start + close);
+        }
+    }
+    let mut result = md.to_string();
+    for close in closing_braces.into_iter().rev() {
+        result.replace_range(close..close + 1, "&#125;");
+    }
+    result
+}
+
+fn heading_attributes(inside: &str) -> bool {
+    !inside.trim().is_empty()
+        && inside
+            .split_whitespace()
+            .all(|token| token.strip_prefix(['#', '.']).is_some_and(attribute_token))
+}
+
 fn reference_id(name: &str, count: usize) -> String {
     if count == 1 {
         format!("fnref-{name}")
@@ -477,8 +589,8 @@ fn alert_signature(
         BlockQuoteKind::Note => ("note", "notice", "note", "Note"),
         BlockQuoteKind::Tip => ("tip", "tip", "doc-tip", "Tip"),
         BlockQuoteKind::Important => ("important", "notice", "note", "Important"),
-        BlockQuoteKind::Warning => ("warning", "notice", "doc-notice", "Warning"),
-        BlockQuoteKind::Caution => ("caution", "notice", "doc-notice", "Caution"),
+        BlockQuoteKind::Warning => ("warning", "notice", "note", "Warning"),
+        BlockQuoteKind::Caution => ("caution", "notice", "note", "Caution"),
     }
 }
 
@@ -518,6 +630,9 @@ fn esc_attr(s: &str) -> String {
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
+            '\n' => out.push_str("&#10;"),
+            '\r' => out.push_str("&#13;"),
+            '\t' => out.push_str("&#9;"),
             _ if xml_char(ch) => out.push(ch),
             _ => {}
         }
@@ -693,7 +808,12 @@ impl Elem {
                         self.name
                     )));
                 }
-                if parse_annotation(&format!("{{.{c}}}")).is_none() {
+                let heading = matches!(self.name.as_str(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6");
+                if !(if heading {
+                    attribute_token(c)
+                } else {
+                    parse_annotation(&format!("{{.{c}}}")).is_some()
+                }) {
                     return Err(lossy(format!(
                         "class {c:?} cannot be represented by a block annotation"
                     )));
@@ -792,7 +912,10 @@ fn elem_to_blocks(el: &Elem, ctx: &mut MdCtx) -> CoreResult<Vec<String>> {
             if el.attr("id").is_none()
                 && class.is_none()
                 && text.trim_end().ends_with('}')
-                && text.contains('{')
+                && text.rsplit_once('{').is_some_and(|(_, tail)| {
+                    let inside = tail.trim_end().trim_end_matches('}');
+                    inside.trim().is_empty() || heading_attributes(inside)
+                })
             {
                 return Err(lossy(
                     "literal trailing heading attributes cannot be preserved",
@@ -884,7 +1007,8 @@ fn elem_to_blocks(el: &Elem, ctx: &mut MdCtx) -> CoreResult<Vec<String>> {
                 .ok_or_else(|| lossy("footnote id is outside the generated fn- scheme"))?;
             let children = footnote_body(el, name, ctx)?;
             let blocks = nodes_to_blocks(&children, ctx)?;
-            let mut def = format!("[^{name}]:");
+            let label = read_footnote_label(el, name)?;
+            let mut def = format!("[^{label}]:");
             for (i, block) in blocks.iter().enumerate() {
                 if i == 0 {
                     def.push(' ');
@@ -947,11 +1071,11 @@ fn attribute_token(token: &str) -> bool {
     !token.is_empty()
         && token
             .chars()
-            .all(|c| !c.is_whitespace() && !matches!(c, '{' | '}' | '\\'))
+            .all(|c| !c.is_whitespace() && !matches!(c, '{' | '}' | '\\' | '<' | '>'))
 }
 
 fn footnote_label(label: &str) -> bool {
-    attribute_token(label) && !label.contains(['[', ']'])
+    !label.trim().is_empty() && !label.contains(['[', ']', '\\', '\n', '\r'])
 }
 
 fn check_role(el: &Elem, expected: &str) -> CoreResult<()> {
@@ -970,81 +1094,96 @@ fn noteref_label(el: &Elem) -> CoreResult<&str> {
 
 /// Validate the entire reference graph before discarding any derived ids/text.
 fn validate_generated_content(nodes: &[Node]) -> CoreResult<MdCtx> {
-    fn visit(
-        nodes: &[Node],
-        ids: &mut HashSet<String>,
-        notes: &mut HashSet<String>,
-        order: &mut Vec<String>,
-        ctx: &mut MdCtx,
-    ) -> CoreResult<()> {
+    fn collect<'a>(nodes: &'a [Node], elements: &mut Vec<&'a Elem>) {
         for node in nodes {
-            let Node::Elem(el) = node else { continue };
-            if let Some(id) = el.attr("id") {
-                if !ids.insert(id.to_string()) {
-                    return Err(lossy(format!("duplicate id {id:?}")));
-                }
+            if let Node::Elem(el) = node {
+                elements.push(el);
+                collect(&el.children, elements);
             }
-            if el.name == "aside" && el.attr("epub:type") == Some("footnote") {
-                if let Some(name) = el.attr("id").and_then(|id| id.strip_prefix("fn-")) {
-                    // CommonMark footnote labels are case insensitive.
-                    if notes
-                        .iter()
-                        .any(|known| known.to_lowercase() == name.to_lowercase())
-                    {
-                        return Err(lossy("duplicate footnote label"));
-                    }
-                    notes.insert(name.to_string());
-                }
-            }
-            if el.name == "a" && el.attr("epub:type") == Some("noteref") {
-                let name = noteref_label(el)?;
-                if !order.iter().any(|n| n == name) {
-                    order.push(name.to_string());
-                }
-                let number = order.iter().position(|n| n == name).unwrap() + 1;
-                let count = ctx.references.entry(name.to_string()).or_default();
-                *count += 1;
-                if el
-                    .attr("id")
-                    .is_some_and(|id| id != reference_id(name, *count))
-                {
-                    return Err(lossy("noteref id does not match its label and occurrence"));
-                }
-                let children = match el.children.as_slice() {
-                    [Node::Elem(sup)] if sup.name == "sup" => {
-                        sup.check_attrs(&[])?;
-                        &sup.children
-                    }
-                    children => children,
-                };
-                if plain_text(children).as_deref() != Some(number.to_string().as_str()) {
-                    return Err(lossy(
-                        "custom noteref text (expected derived footnote number)",
-                    ));
-                }
-            }
-            visit(&el.children, ids, notes, order, ctx)?;
         }
-        Ok(())
+    }
+    let mut elements = Vec::new();
+    collect(nodes, &mut elements);
+    let mut ids = HashSet::new();
+    let mut authored_ids = HashSet::new();
+    let mut notes = HashMap::new();
+    for el in &elements {
+        let note = el.name == "aside" && el.attr("epub:type") == Some("footnote");
+        let reference = el.name == "a" && el.attr("epub:type") == Some("noteref");
+        if let Some(id) = el.attr("id") {
+            if !ids.insert(id) {
+                return Err(lossy(format!("duplicate id {id:?}")));
+            }
+            if !note && !reference {
+                authored_ids.insert(id);
+            }
+        }
+        if note {
+            let token = el
+                .attr("id")
+                .and_then(|id| id.strip_prefix("fn-"))
+                .filter(|name| footnote_label(name))
+                .ok_or_else(|| lossy("footnote <aside> without an id in the fn- scheme"))?;
+            let label = read_footnote_label(el, token)?;
+            let generated = footnote_token(&label);
+            if el.attr("role").is_some() && generated != token {
+                return Err(lossy("footnote id does not match its encoded label"));
+            }
+            if notes
+                .insert(UniCase::new(label), (token, generated))
+                .is_some()
+            {
+                return Err(lossy("duplicate footnote label"));
+            }
+        }
+    }
+    for (_, generated) in notes.values() {
+        if authored_ids.contains(format!("fn-{generated}").as_str()) {
+            return Err(lossy("generated footnote id collides with an authored id"));
+        }
     }
     let mut ctx = MdCtx::default();
-    let mut notes = HashSet::new();
-    visit(
-        nodes,
-        &mut HashSet::new(),
-        &mut notes,
-        &mut Vec::new(),
-        &mut ctx,
-    )?;
-    if ctx.references.keys().any(|name| !notes.contains(name)) {
-        return Err(lossy("noteref without a matching footnote definition"));
-    }
+    let mut order = Vec::new();
     let mut reference_ids = HashSet::new();
-    for (name, count) in &ctx.references {
-        for occurrence in 1..=*count {
-            if !reference_ids.insert(reference_id(name, occurrence)) {
-                return Err(lossy("footnote labels produce colliding reference ids"));
+    for el in elements {
+        if el.name != "a" || el.attr("epub:type") != Some("noteref") {
+            continue;
+        }
+        let name = noteref_label(el)?;
+        let label = read_footnote_label(el, name)?;
+        let (token, generated) = notes
+            .get(&UniCase::new(label))
+            .ok_or_else(|| lossy("noteref without a matching footnote definition"))?;
+        if el.attr("role").is_some() && name != *token {
+            return Err(lossy("noteref target does not match its definition id"));
+        }
+        if !order.contains(token) {
+            order.push(*token);
+        }
+        let number = order.iter().position(|n| n == token).unwrap() + 1;
+        let count = ctx.references.entry(token.to_string()).or_default();
+        *count += 1;
+        let reference = reference_id(generated, *count);
+        if authored_ids.contains(reference.as_str()) {
+            return Err(lossy("generated noteref id collides with an authored id"));
+        }
+        if !reference_ids.insert(reference.clone()) {
+            return Err(lossy("footnote labels produce colliding reference ids"));
+        }
+        if el.attr("id").is_some_and(|id| id != reference) {
+            return Err(lossy("noteref id does not match its label and occurrence"));
+        }
+        let children = match el.children.as_slice() {
+            [Node::Elem(sup)] if sup.name == "sup" => {
+                sup.check_attrs(&[])?;
+                &sup.children
             }
+            children => children,
+        };
+        if plain_text(children).as_deref() != Some(number.to_string().as_str()) {
+            return Err(lossy(
+                "custom noteref text (expected derived footnote number)",
+            ));
         }
     }
     Ok(ctx)
@@ -1229,7 +1368,7 @@ fn escape_entities(text: &str) -> String {
     out
 }
 
-fn markdown_title(el: &Elem) -> CoreResult<String> {
+fn markdown_title(el: &Elem, in_table: bool) -> CoreResult<String> {
     match el.attr("title") {
         None => Ok(String::new()),
         Some("") => Err(lossy("empty title attribute cannot be preserved")),
@@ -1238,6 +1377,10 @@ fn markdown_title(el: &Elem) -> CoreResult<String> {
             escape_entities(title)
                 .replace('\\', "\\\\")
                 .replace('"', "&quot;")
+                .replace('\n', "&#10;")
+                .replace('\r', "&#13;")
+                .replace('\t', "&#9;")
+                .replace('|', if in_table { "&#124;" } else { "|" })
         )),
     }
 }
@@ -1542,7 +1685,8 @@ fn inline_elem_to_md(el: &Elem, in_table: bool) -> CoreResult<String> {
                 el.check_attrs(&["epub:type", "href", "id", "role"])?;
                 check_role(el, "doc-noteref")?;
                 let name = noteref_label(el)?;
-                return Ok(format!("[^{name}]"));
+                let label = read_footnote_label(el, name)?;
+                return Ok(format!("[^{label}]"));
             }
             if !epub_type.is_empty() {
                 return Err(lossy(format!("epub:type=\"{epub_type}\" on <a>")));
@@ -1586,7 +1730,7 @@ fn inline_elem_to_md(el: &Elem, in_table: bool) -> CoreResult<String> {
                 "[{}]({}{})",
                 inner.trim(),
                 link_dest(href),
-                markdown_title(el)?
+                markdown_title(el, in_table)?
             ))
         }
         "img" => {
@@ -1598,7 +1742,7 @@ fn inline_elem_to_md(el: &Elem, in_table: bool) -> CoreResult<String> {
                 "![{}]({}{})",
                 escape_md(alt, in_table),
                 link_dest(src),
-                markdown_title(el)?
+                markdown_title(el, in_table)?
             ))
         }
         "br" => {
@@ -2038,6 +2182,101 @@ mod tests {
             assert_eq!(markdown_to_xhtml(&to_md(&xhtml)), xhtml);
         }
         let mismatched = "<p>Ref<a epub:type=\"noteref\" href=\"#fn-a\">1</a></p><aside epub:type=\"footnote\" id=\"fn-A\"><p>Note.</p></aside>";
-        assert!(xhtml_to_markdown(mismatched).is_err());
+        assert!(xhtml_to_markdown(mismatched).is_ok());
+    }
+
+    #[test]
+    fn titles_preserve_pipes_and_attribute_whitespace() {
+        for title in [
+            "a|b",
+            "one\ntwo",
+            "one\n\ntwo",
+            "one\r\ntwo",
+            "one\ttwo",
+            "a\\|b",
+        ] {
+            for image in [false, true] {
+                let inline = if image {
+                    format!(
+                        "<img src=\"x.png\" alt=\"cover\" title=\"{}\"/>",
+                        esc_attr(title)
+                    )
+                } else {
+                    format!("<a href=\"x\" title=\"{}\">link</a>", esc_attr(title))
+                };
+                for xhtml in [
+                    format!("<p>{inline}</p>\n"),
+                    format!("<table>\n<thead>\n<tr>\n<th scope=\"col\">{inline}</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>{inline}</td>\n</tr>\n</tbody>\n</table>\n"),
+                ] {
+                    assert_eq!(markdown_to_xhtml(&to_md(&xhtml)), xhtml);
+                }
+            }
+        }
+        let md = "| [link](x \"a\\|b\") | ![cover](x.png \"c\\|d\") |\n| --- | --- |\n";
+        let xhtml = markdown_to_xhtml(md);
+        assert!(xhtml.contains("title=\"a|b\""));
+        assert!(xhtml.contains("title=\"c|d\""));
+        assert_eq!(markdown_to_xhtml(&to_md(&xhtml)), xhtml);
+    }
+
+    #[test]
+    fn footnote_identity_uses_parser_case_folding_and_first_definition() {
+        for (reference, definition) in [("foo", "FOO"), ("FOO", "foo"), ("STRASSE", "Straße")] {
+            let md = format!("A[^{reference}] B[^{definition}].\n\n[^{definition}]: First.\n\n[^{reference}]: Second.\n");
+            let xhtml = markdown_to_xhtml(&md);
+            let token = footnote_token(definition);
+            assert_eq!(xhtml.matches(&format!("id=\"fn-{token}\"")).count(), 1);
+            assert_eq!(xhtml.matches(&format!("href=\"#fn-{token}\"")).count(), 2);
+            assert!(xhtml.contains("First."));
+            assert!(!xhtml.contains("Second."));
+            assert_eq!(markdown_to_xhtml(&to_md(&xhtml)), xhtml);
+        }
+    }
+
+    #[test]
+    fn future_reference_ids_cannot_take_over_authored_targets() {
+        for (label, id, refs) in [
+            ("a", "fnref-a", 1),
+            ("a", "fnref-a-2", 2),
+            ("a b", "fnref-z-612062", 1),
+        ] {
+            let reference = format!("<a epub:type=\"noteref\" href=\"#fn-{label}\">1</a>");
+            let xhtml = format!("<h2 id=\"{id}\">Target</h2><p><a href=\"#{id}\">jump</a>{}</p><aside epub:type=\"footnote\" id=\"fn-{label}\"><p>Note.</p></aside>", reference.repeat(refs));
+            assert!(matches!(
+                xhtml_to_markdown(&xhtml),
+                Err(CoreError::ConversionLossy { .. })
+            ));
+            let md = format!(
+                "## Target {{#{id}}}\n\n{}\n\n[^{label}]: Note.\n",
+                format!("Ref[^{label}] ").repeat(refs)
+            );
+            let written = markdown_to_xhtml(&md);
+            assert_eq!(written.matches(&format!("id=\"{id}\"")).count(), 1);
+            assert_eq!(markdown_to_xhtml(&to_md(&written)), written);
+        }
+    }
+
+    #[test]
+    fn literal_heading_braces_do_not_change_code_or_nested_headings() {
+        // The parser also consumes empty attribute blocks; do not accept these
+        // as literal heading text until the writer can preserve them.
+        assert!(xhtml_to_markdown("<h2>Empty {}</h2>").is_err());
+        assert!(xhtml_to_markdown("<h2 class=\"foo&lt;bar\">Title</h2>").is_err());
+        for (md, expected) in [
+            ("## Sets {a, b}\n", "<h2>Sets {a, b}</h2>\n"),
+            (
+                "> ## Sets {a, b}\n",
+                "<blockquote>\n<h2>Sets {a, b}</h2>\n</blockquote>\n",
+            ),
+            ("Sets {a, b}\n---\n", "<h2>Sets {a, b}</h2>\n"),
+            ("## `{a, b}`\n", "<h2><code>{a, b}</code></h2>\n"),
+            (
+                "```\n## Sets {a, b}\n```\n",
+                "<pre><code>## Sets {a, b}\n</code></pre>\n",
+            ),
+        ] {
+            assert_eq!(markdown_to_xhtml(md), expected);
+            assert_eq!(markdown_to_xhtml(&to_md(expected)), expected);
+        }
     }
 }
