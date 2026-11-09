@@ -491,6 +491,13 @@ fn conversion_standard_book_passes_native_validation() {
         include_str!("fixtures/roundtrip/021-footnote-multiblock.md"),
         include_str!("fixtures/roundtrip/022-empty-paragraph.md"),
         include_str!("fixtures/roundtrip/023-autolinks.md"),
+        include_str!("fixtures/roundtrip/024-title-delimiters.md"),
+        include_str!("fixtures/roundtrip/025-heading-class-tokens.md"),
+        include_str!("fixtures/roundtrip/026-literal-heading-braces.md"),
+        include_str!("fixtures/roundtrip/027-alert-annotation.md"),
+        include_str!("fixtures/roundtrip/028-encoded-footnote-labels.md"),
+        include_str!("fixtures/roundtrip/write/footnote-duplicate.md"),
+        "`xmlns:epub`",
     ]
     .join("\n\n")
     .replace("../text/ch02.xhtml", target_name)

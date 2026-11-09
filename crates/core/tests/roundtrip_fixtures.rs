@@ -47,8 +47,8 @@ fn paired_fixtures_convert_both_ways_and_round_trip() {
         .collect();
     md_files.sort();
     assert!(
-        md_files.len() >= 23,
-        "expected at least 23 paired fixtures, found {}",
+        md_files.len() >= 28,
+        "expected at least 28 paired fixtures, found {}",
         md_files.len()
     );
 
@@ -98,8 +98,8 @@ fn bad_fixtures_are_rejected() {
         .collect();
     bad_files.sort();
     assert!(
-        bad_files.len() >= 20,
-        "expected at least 20 negative fixtures, found {}",
+        bad_files.len() >= 22,
+        "expected at least 22 negative fixtures, found {}",
         bad_files.len()
     );
 
@@ -115,6 +115,40 @@ fn bad_fixtures_are_rejected() {
             }
             Err(other) => panic!("{name}: wrong error kind: {other}"),
             Ok(md) => panic!("{name}: must be rejected, got:\n{md}"),
+        }
+    }
+}
+
+#[test]
+fn write_policy_fixtures() {
+    for entry in std::fs::read_dir(fixture_dir().join("write")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|ext| ext == "md") {
+            let expected = read(&path.with_extension("xhtml"));
+            assert_eq!(
+                markdown_to_xhtml(&read(&path)),
+                expected,
+                "{}",
+                path.display()
+            );
+            let canonical = xhtml_to_markdown(&expected).unwrap();
+            assert_eq!(markdown_to_xhtml(&canonical), expected);
+        }
+    }
+}
+
+#[test]
+fn legacy_read_fixtures() {
+    for entry in std::fs::read_dir(fixture_dir().join("read")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|ext| ext == "xhtml") {
+            let md = xhtml_to_markdown(&read(&path)).unwrap();
+            assert_eq!(md, read(&path.with_extension("md")), "{}", path.display());
+            let generated = markdown_to_xhtml(&md);
+            assert_eq!(
+                markdown_to_xhtml(&xhtml_to_markdown(&generated).unwrap()),
+                generated
+            );
         }
     }
 }

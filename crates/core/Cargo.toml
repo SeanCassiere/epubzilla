@@ -9,6 +9,7 @@ description = "EPUB engine: parse, model, and write EPUB files"
 [dependencies]
 pulldown-cmark = { version = "0.13.4", default-features = false }
 quick-xml = "0.42.0"
+unicase = "2.9"
 serde = { workspace = true }
 thiserror = { workspace = true }
 time = { version = "0.3", default-features = false, features = ["std", "formatting"] }

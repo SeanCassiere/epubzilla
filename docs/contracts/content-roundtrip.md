@@ -64,12 +64,22 @@ Any of the following in the body forces `format: Xhtml`:
 **Class preservation:** a single `class` attribute on an in-subset block element
 does not force source mode; it is carried through the round-trip via an
 attribute annotation (`{.classname}` Pandoc-style) so book CSS keeps working.
+Heading classes use the heading-attribute token grammar, including `foo:bar`
+and `foo.bar`; standalone block annotations retain their narrower
+letter-first, ASCII alphanumeric/hyphen/underscore grammar. Trailing heading
+braces containing non-attribute tokens (for example `## Sets {a, b}`) remain
+literal text on write.
 
 **Heading IDs:** plain headings remain id-less. The writer keeps the first
 occurrence of a duplicate heading ID and omits it on later headings. Generated
 footnote IDs are reserved, so headings cannot shadow them. Duplicate IDs or
 IDs that cannot be expressed as a Markdown attribute token force source mode
-on read.
+on read. This includes authored IDs that would collide with reference IDs
+newly generated while upgrading a legacy footnote.
+
+**Link/image titles:** table-cell pipes and attribute tabs/line breaks are
+serialized as character references in Markdown. XML attribute whitespace is
+also emitted as character references, preserving it through XML normalization.
 
 **Table alignment:** the only supported inline style is a single
 `text-align: left`, `center`, or `right` declaration on `th`/`td`, allowing
@@ -88,18 +98,32 @@ on read. Alert signatures must match this table exactly; an optional leading
 | NOTE / `alert alert-note` | `notice` | `note` | Note |
 | TIP / `alert alert-tip` | `tip` | `doc-tip` | Tip |
 | IMPORTANT / `alert alert-important` | `notice` | `note` | Important |
-| WARNING / `alert alert-warning` | `notice` | `doc-notice` | Warning |
-| CAUTION / `alert alert-caution` | `notice` | `doc-notice` | Caution |
+| WARNING / `alert alert-warning` | `notice` | `note` | Warning |
+| CAUTION / `alert alert-caution` | `notice` | `note` | Caution |
 
 Custom titles, other asides, and altered task marker signatures force source
 mode. Escaped or unknown alert markers remain plain blockquote text. Loose
-task items place the marker at the start of their first paragraph.
+task items place the marker at the start of their first paragraph. A standalone
+`{.class}` annotation immediately before an alert remains a literal paragraph;
+it is not discarded or added to the alert's exact class signature.
 
-Footnote reference IDs are `fnref-label`, `fnref-label-2`, etc.; their
-numbers follow first-reference order. Note IDs are `fn-label`. Legacy
-references without `role`, `id`, or `sup` remain readable when their target
-and number match the generated scheme. Custom IDs, unmatched targets,
-non-derived reference text, or conflicting roles force source mode. Each note
+Footnote labels match case-insensitively using the Markdown parser's Unicode
+case folding. The first definition wins, including its spelling and body;
+subsequent definitions with the same identity are discarded before processing
+their contents, so they cannot add IDs, reference numbers, or backlinks.
+
+Footnote reference IDs are `fnref-token`, `fnref-token-2`, etc.; their
+numbers follow first-reference order. Note IDs are `fn-token`. A label composed
+of ASCII letters, digits, hyphens and underscores is its own token, unless it
+starts with the reserved `z-` prefix. All other labels become `z-` followed by
+the lowercase hexadecimal encoding of their UTF-8 bytes. This deterministic,
+injective encoding keeps spaces and other unsafe characters out of IDs and
+fragment URLs. The reader decodes these tokens back to labels for current
+footnotes. Legacy references without `role`, `id`, or `sup` remain readable,
+including labels with spaces or punctuation and case differences between
+references and definitions, when their numbers match the generated scheme.
+Custom IDs, unmatched targets, non-derived reference text, or conflicting roles
+force source mode. Each note
 ends with a paragraph of `<a role="doc-backlink" href="#fnref-…">↩</a>`
 links, one per reference; only this exact generated backlink group may be
 omitted on read. If labels such as `note` and `note-2` collide with
@@ -139,6 +163,10 @@ above (attribute-free → unwrapped; any attribute → out of subset).
 Serialized chapters must be valid EPUB 3 XHTML content documents:
 `application/xhtml+xml`, XML well-formed, `epub:` namespace declared when
 footnotes or alerts are used, and pass the native validator (ADR-0003).
+Namespace injection inspects the real document root declaration; mentions in
+text/comments or declarations on descendants do not suppress it. `doc-tip`
+is valid on `<aside>`; warning and caution use `note` because `doc-notice`
+is not a permitted role there (epubcheck 5.2.1).
 XML-illegal control characters are removed before parsing Markdown. Native
 validation reports a warning for a relative anchor target whose path does not
 resolve to a manifest item; query strings and fragments are excluded from
@@ -151,8 +179,10 @@ both directions for every pair. Adding a capability to the subset requires
 adding fixtures in the same PR — the fixture set *is* the executable form of
 this contract.
 
-The duplicate-heading-ID write policy has a separate input/output pair in
-`roundtrip/write/` because discarding duplicate IDs intentionally changes the
-authored Markdown. Session-level fixtures write a book containing every new
-construct, validate it natively, save/reopen it, and export
+Write policies have separate input/output pairs in `roundtrip/write/`,
+including duplicate heading IDs and duplicate footnote definitions, because
+deduplication intentionally changes the authored Markdown. Legacy footnote
+read compatibility has fixtures in `roundtrip/read/`. Session-level fixtures
+write a book containing every new construct, validate it natively, save/reopen
+it, and export
 `target/epubcheck-fixtures/conversion-standard.epub` for CI's epubcheck job.
