@@ -233,6 +233,23 @@ export function takePendingOpenPaths(): Promise<string[]> {
   return invoke<string[]>("take_pending_open_paths");
 }
 
+/**
+ * The frontend's listeners are going away (unmount): the shell stops
+ * sending it events and parks Finder opens until it registers again.
+ */
+export function detachFrontend(): Promise<void> {
+  return invoke<void>("detach_frontend");
+}
+
+/**
+ * Acknowledge quit request `request` as soon as it arrives (before any
+ * guard runs): an unacknowledged request tells the shell the webview is
+ * not responding, and it asks natively instead.
+ */
+export function ackQuitRequest(request: number): Promise<void> {
+  return invoke<void>("ack_quit_request", { request });
+}
+
 /** Quit for real — only after the unsaved-changes guard passed. */
 export function quitApp(): Promise<void> {
   return invoke<void>("quit_app");

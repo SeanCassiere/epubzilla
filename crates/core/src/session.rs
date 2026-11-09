@@ -911,6 +911,12 @@ impl Session {
         Ok(issues)
     }
 
+    /// Whether any open book has changes that were not saved (the shell's
+    /// last-resort quit prompt asks before discarding them).
+    pub fn has_unsaved_changes(&self) -> bool {
+        self.books.values().any(|open| open.book.dirty)
+    }
+
     /// Drop session state for one book.
     pub fn close_book(&mut self, book_id: &str) -> CoreResult<()> {
         self.books
@@ -2237,6 +2243,16 @@ mod tests {
         assert_eq!(reopened.nav.len(), book.nav.len());
         // dcterms:modified was refreshed in the regenerated OPF.
         assert!(reopened.metadata.modified.is_some());
+    }
+
+    #[test]
+    fn unsaved_changes_track_dirty_books() {
+        let mut session = Session::new();
+        assert!(!session.has_unsaved_changes());
+        let book = session.create_book(sample_metadata());
+        assert!(session.has_unsaved_changes());
+        session.close_book(&book.id).unwrap();
+        assert!(!session.has_unsaved_changes());
     }
 
     #[test]

@@ -12,8 +12,9 @@ use std::sync::Mutex;
 
 use commands::SharedSession;
 use epubzilla_core::Session;
-use lifecycle::{ExitDecision, LifecycleState, QUIT_REQUESTED_EVENT};
+use lifecycle::LifecycleState;
 use recents::{RecentBooks, SharedRecents, RECENTS_FILE};
+use tauri::webview::PageLoadEvent;
 use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -53,6 +54,13 @@ pub fn run() {
                 let _ = app.emit("app-menu", id.to_owned());
             }
         })
+        // Frontend liveness: a (re)loading page has no listeners until it
+        // registers again via take_pending_open_paths.
+        .on_page_load(|webview, payload| {
+            if payload.event() == PageLoadEvent::Started {
+                webview.state::<LifecycleState>().detach_frontend();
+            }
+        })
         .manage(Mutex::new(Session::new()) as SharedSession)
         .manage(LifecycleState::default())
         .invoke_handler(tauri::generate_handler![
@@ -78,6 +86,8 @@ pub fn run() {
             lifecycle::remove_recent_book,
             lifecycle::clear_recent_books,
             lifecycle::take_pending_open_paths,
+            lifecycle::detach_frontend,
+            lifecycle::ack_quit_request,
             lifecycle::quit_app,
             lifecycle::set_menu_state,
         ])
@@ -90,11 +100,7 @@ pub fn run() {
 
     app.run(|app, event| match event {
         tauri::RunEvent::ExitRequested { code, api, .. } => {
-            let state = app.state::<LifecycleState>();
-            if state.on_exit_requested(code) == ExitDecision::AskFrontend {
-                api.prevent_exit();
-                let _ = app.emit(QUIT_REQUESTED_EVENT, ());
-            }
+            lifecycle::handle_exit_request(app, code, || api.prevent_exit());
         }
         // Finder double-click / Open With / drop on the Dock icon (macOS).
         #[cfg(any(target_os = "macos", target_os = "ios"))]
