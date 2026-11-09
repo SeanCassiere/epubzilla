@@ -24,6 +24,7 @@ export function Welcome() {
           ref={openRef}
           type="button"
           data-variant="primary"
+          data-size="lg"
           onClick={() => requestOpen()}
           disabled={busy}
           title="Open an EPUB (Ctrl/Cmd+O)"
@@ -33,6 +34,7 @@ export function Welcome() {
         <button
           type="button"
           data-variant="secondary"
+          data-size="lg"
           onClick={requestNew}
           disabled={busy}
           title="Start a new book (Ctrl/Cmd+N)"

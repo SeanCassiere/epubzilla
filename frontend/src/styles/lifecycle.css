@@ -1,52 +1,74 @@
 /* Book lifecycle surfaces: welcome panel, recents, unsaved-changes sheet,
-   error banner, drop overlay, activity status. Structural only — layout,
-   spacing, and system colors. Visual styling of buttons and surfaces
-   (data-variant="primary|secondary|destructive|plain") belongs to the
-   design-token layer. */
+   New Book dialog notes and errors, error banner, drop overlay, document
+   identity and activity status.
+
+   Design tokens only (App.css): no color literals, and every spacing,
+   radius and font size is a token. Buttons, the .modal surface and the
+   .banner + data-tone recipe come from App.css; this file only adds
+   layout and the lifecycle-specific details on top of them.
+
+   Vibrancy (macOS): none of these surfaces live inside .sidebar. The only
+   opaque paint here is the drop-overlay label (--surface-raised), which
+   floats above the window rather than inside the sidebar subtree. */
 
 /* ---- welcome ---------------------------------------------------------- */
 
+/* Calm, centered starting point: actions, a hint, then the recents. */
 .welcome {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 1rem;
-  padding: 3rem 1.5rem 2rem;
+  justify-content: safe center;
+  gap: var(--gap-section);
+  min-height: 0;
+  padding: var(--sp-32) var(--sp-24);
   overflow-y: auto;
+  text-align: center;
 }
 
 .welcome-actions {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 0.75rem;
+  gap: var(--gap-section);
 }
 
 .welcome-hint {
   margin: 0;
-  font-size: 0.9rem;
-  color: GrayText;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
 }
 
+.welcome > .lifecycle-status {
+  margin: 0;
+}
+
+/* Layout width (not spacing): a comfortable list measure. */
 .welcome-recents {
   width: min(28rem, 100%);
-  margin-top: 1.5rem;
+  margin-top: var(--sp-16);
+  text-align: start;
 }
 
+/* Finder-style section header: small, semibold, no uppercase. */
 .welcome-recents-heading {
-  margin: 0 0 0.5rem;
-  font-size: 0.8rem;
+  margin: 0 0 var(--sp-4);
+  padding: 0 var(--sp-8);
+  font-size: var(--text-xs);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: GrayText;
+  line-height: var(--leading-tight);
+  color: var(--text-secondary);
 }
 
 .welcome-recents-empty {
   margin: 0;
-  font-size: 0.9rem;
-  color: GrayText;
+  padding: var(--sp-12) var(--sp-8);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+  text-align: center;
 }
 
 .welcome-recents-list {
@@ -55,90 +77,112 @@
   padding: 0;
   display: flex;
   flex-direction: column;
+  gap: var(--sp-2);
 }
 
-.welcome-recent {
-  display: flex;
+/* A recent book: full-width plain row (>= 24px target), file name on the
+   left, the folder it lives in as secondary text on the right. The
+   plain-variant hover/active fills come from App.css. */
+.app-shell .welcome-recent {
   width: 100%;
-  align-items: baseline;
+  height: auto;
+  min-height: var(--control-lg);
   justify-content: space-between;
-  gap: 1rem;
-  padding: 0.4rem 0.6rem;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  color: inherit;
-  font: inherit;
+  gap: var(--sp-12);
+  padding: var(--sp-4) var(--sp-8);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-base);
+  line-height: var(--leading-base);
   text-align: start;
-  cursor: pointer;
 }
 
-.welcome-recent:hover:not(:disabled),
-.welcome-recent:focus-visible {
-  background: color-mix(in srgb, currentColor 8%, transparent);
+.app-shell .welcome-recent:focus-visible {
+  outline-offset: -2px;
+  background: var(--fill-hover);
 }
 
 .welcome-recent-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  color: var(--text-primary);
 }
 
 .welcome-recent-folder {
-  flex: none;
-  max-width: 45%;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 50%;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.85rem;
-  color: GrayText;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.welcome-recent:disabled :is(.welcome-recent-name, .welcome-recent-folder) {
+  color: var(--text-disabled);
 }
 
 /* ---- document identity -------------------------------------------------- */
 
+/* "Not saved" (never written to disk) and "EPUB 2 — read-only": neutral
+   badges beside the title, same recipe as the sidebar chapter badge. */
 .book-not-saved,
 .book-read-only {
-  font-size: 0.8rem;
-  color: GrayText;
+  flex: none;
+  align-self: center;
+  padding: 0 var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: var(--leading-base);
+  color: var(--text-secondary);
   white-space: nowrap;
 }
 
+/* Activity ("Opening…", "Saving…"): quiet secondary text. */
 .lifecycle-status {
-  font-size: 0.9rem;
-  color: GrayText;
+  min-width: 0;
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---- unsaved-changes sheet --------------------------------------------- */
 
+/* Same .modal surface and .modal-actions row as every other dialog; the
+   informative text under the question is secondary, as in an NSAlert. */
 .sheet .sheet-body {
   margin: 0;
-  font-size: 0.9rem;
-}
-
-.sheet-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-top: 1.25rem;
-}
-
-/* Don't Save sits apart from Cancel/Save (HIG). */
-.sheet-actions-spacer {
-  flex: 1;
+  font-size: var(--text-base);
+  color: var(--text-secondary);
 }
 
 /* ---- New Book dialog ---------------------------------------------------- */
 
 .metadata-form-note {
   margin: 0;
-  font-size: 0.8rem;
-  color: GrayText;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
 }
 
+/* Inline danger callout, same recipe as the in-flow .error banner: the
+   tint and a left rule carry the tone; the text stays primary. */
 .form-error {
-  color: #c0392b;
-  font-size: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-width: 0;
+  padding: var(--sp-6) var(--sp-12);
+  border: 1px solid var(--tint-danger-border);
+  border-left: 3px solid var(--color-danger);
+  border-radius: var(--radius-sm);
+  background: var(--tint-danger);
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
 }
 
 .form-error p {
@@ -146,71 +190,95 @@
 }
 
 .form-error-details {
-  opacity: 0.8;
-  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
 }
 
-/* ---- error banner ------------------------------------------------------- */
+/* ---- error banner (.banner[data-tone="danger"]) ------------------------- */
 
+/* Tighter rows than a one-line banner: message, then wrapped details. */
 .error-banner {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.25rem 0.75rem;
-  padding: 0.5rem 1rem;
-  border-bottom: 1px solid color-mix(in srgb, #c0392b 35%, transparent);
-  background: color-mix(in srgb, #c0392b 8%, Canvas);
-  font-size: 0.9rem;
+  row-gap: var(--sp-2);
+  padding-block: var(--sp-6);
 }
 
 .error-banner-message {
-  flex: 1;
-  min-width: 12rem;
-  margin: 0;
+  font-weight: 600;
 }
 
+/* Details wrap onto their own full-width line under the message. */
 .error-banner-details {
   order: 3;
   flex-basis: 100%;
-  font-size: 0.8rem;
+  min-width: 0;
+  font-size: var(--text-sm);
 }
 
 .error-banner-details summary {
-  cursor: pointer;
-  color: GrayText;
+  width: fit-content;
+  border-radius: var(--radius-xs);
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.error-banner-details summary:hover {
+  color: var(--text-primary);
 }
 
 .error-banner-details p {
-  margin: 0.25rem 0 0;
+  margin: var(--sp-4) 0 0;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
   overflow-wrap: anywhere;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .error-banner-actions {
+  flex: none;
   display: flex;
-  gap: 0.5rem;
+  align-items: center;
+  gap: var(--gap-tight);
+  margin-left: auto;
 }
 
 /* ---- drop overlay ------------------------------------------------------- */
 
 .drop-overlay {
   position: fixed;
-  inset: 0.5rem;
+  inset: var(--sp-8);
   z-index: 20;
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 2px dashed Highlight;
-  border-radius: 10px;
-  background: color-mix(in srgb, Highlight 12%, transparent);
+  border: 2px dashed var(--accent-fill);
+  border-radius: var(--radius-lg);
+  background: var(--tint-info);
   pointer-events: none;
 }
 
 .drop-overlay-label {
   margin: 0;
-  padding: 0.6rem 1rem;
-  border-radius: 8px;
-  background: Canvas;
-  color: CanvasText;
+  padding: var(--sp-8) var(--sp-16);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-primary);
+  font-size: var(--text-md);
   font-weight: 600;
+}
+
+/* ---- Windows High Contrast / forced colors ------------------------------ */
+
+@media (forced-colors: active) {
+  .drop-overlay {
+    border-color: Highlight;
+  }
+
+  .drop-overlay-label {
+    border: 1px solid CanvasText;
+    box-shadow: none;
+  }
+
+  .form-error {
+    border-color: CanvasText;
+  }
 }
