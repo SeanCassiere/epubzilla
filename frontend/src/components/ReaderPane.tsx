@@ -94,6 +94,7 @@ export function ReaderPane() {
     previousChapter,
     editing,
     startEditing,
+    frozen,
   } = useReader();
 
   // Delayed loading indicator (issue #56): the previous chapter stays
@@ -283,7 +284,7 @@ export function ReaderPane() {
         <button
           type="button"
           onClick={() => void previousChapter()}
-          disabled={!hasPrevious || status === "loading-chapter"}
+          disabled={frozen || !hasPrevious || status === "loading-chapter"}
           title="Previous chapter (ArrowLeft; Ctrl/Cmd+Alt+ArrowLeft anywhere)"
         >
           ← Previous
@@ -294,7 +295,7 @@ export function ReaderPane() {
         <button
           type="button"
           onClick={() => void nextChapter()}
-          disabled={!hasNext || status === "loading-chapter"}
+          disabled={frozen || !hasNext || status === "loading-chapter"}
           title="Next chapter (ArrowRight; Ctrl/Cmd+Alt+ArrowRight anywhere)"
         >
           Next →
@@ -312,7 +313,7 @@ export function ReaderPane() {
             type="button"
             className="edit-toggle"
             onClick={startEditing}
-            disabled={status === "loading-chapter"}
+            disabled={frozen || status === "loading-chapter"}
             title="Edit this chapter (Ctrl/Cmd+E)"
           >
             Edit

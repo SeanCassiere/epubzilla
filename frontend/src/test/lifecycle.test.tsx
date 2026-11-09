@@ -32,17 +32,23 @@ import App from "../App";
 import { DEDUPE_WINDOW_MS } from "../lib/shortcuts";
 import { epub2Fixture, epub3Fixture } from "./fixtures";
 
+// The mocks honour `readOnly` like the real surfaces. fireEvent.change
+// still reaches onChange on a read-only textarea, which is how tests make
+// an edit "slip through" to exercise the revision re-check.
 vi.mock("../components/CodeEditor", () => ({
   CodeEditor: ({
     value,
     onChange,
+    readOnly,
   }: {
     value: string;
     onChange: (next: string) => void;
+    readOnly?: boolean;
   }) => (
     <textarea
       aria-label="chapter buffer"
       value={value}
+      readOnly={readOnly}
       onChange={(e) => onChange(e.target.value)}
     />
   ),
@@ -52,13 +58,16 @@ vi.mock("../components/MilkdownEditor", () => ({
   MilkdownEditor: ({
     value,
     onChange,
+    readOnly,
   }: {
     value: string;
     onChange: (next: string) => void;
+    readOnly?: boolean;
   }) => (
     <textarea
       aria-label="chapter buffer"
       value={value}
+      readOnly={readOnly}
       onChange={(e) => onChange(e.target.value)}
     />
   ),
@@ -101,6 +110,10 @@ interface Backend {
   openGate: Promise<void> | null;
   /** read_chapter for this resource waits on the gate (consumed once). */
   chapterGate: { resourceId: string; gate: Promise<void> } | null;
+  /** Every read_chapter takes this long (real IPC latency). */
+  chapterDelayMs: number;
+  /** save_book waits on this when set (consumed once). */
+  saveGate: Promise<void> | null;
   saveError: unknown;
   createError: unknown;
   /** Book served for opens; defaults to the EPUB 3 fixture. */
@@ -121,6 +134,8 @@ function mockBackend(): Backend {
     openErrors: new Map(),
     openGate: null,
     chapterGate: null,
+    chapterDelayMs: 0,
+    saveGate: null,
     saveError: null,
     createError: null,
     fixture: "epub3",
@@ -186,6 +201,9 @@ function mockBackend(): Backend {
             backend.chapterGate = null;
             await gate.gate;
           }
+          if (backend.chapterDelayMs > 0) {
+            await new Promise((r) => setTimeout(r, backend.chapterDelayMs));
+          }
           const source =
             args.prefer === "Markdown" ? fixture.markdown : fixture.chapters;
           const chapter = source[id] ?? fixture.chapters[id];
@@ -218,10 +236,34 @@ function mockBackend(): Backend {
           return book;
         }
         case "save_book": {
+          if (backend.saveGate !== null) {
+            const gate = backend.saveGate;
+            backend.saveGate = null;
+            await gate;
+          }
           if (backend.saveError !== null) throw backend.saveError;
           const before = current();
           const path = (args.path as string | null) ?? before.source;
           const book = { ...before, dirty: false, source: path };
+          books.set(book.id, book);
+          return book;
+        }
+        case "add_resource_from_path": {
+          const before = current();
+          const name = (args.osPath as string).split("/").pop() ?? "img.png";
+          const book: Book = {
+            ...before,
+            dirty: true,
+            resources: [
+              ...before.resources,
+              {
+                id: `img-${before.resources.length}`,
+                path: `OEBPS/images/${name}`,
+                media_type: "image/png",
+                size: BigInt(1),
+              },
+            ],
+          };
           books.set(book.id, book);
           return book;
         }
@@ -252,6 +294,8 @@ function mockBackend(): Backend {
           return paths;
         }
         case "quit_app":
+        case "ack_quit_request":
+        case "detach_frontend":
         case "set_menu_state":
         case "plugin:window|set_title":
         case "plugin:window|destroy":
@@ -871,6 +915,9 @@ describe("Close Book", () => {
 describe("document identity", () => {
   it("window title and Not saved follow open, create, save as", async () => {
     const backend = mockBackend();
+    // Real IPC latency: chapter reads resolve on a later task, so the new
+    // book is adopted (and the sidebar mounted) before createBook returns.
+    backend.chapterDelayMs = 30;
     await mount(backend);
     const title = () => lastCall(backend, "plugin:window|set_title")?.args.value;
 
@@ -889,6 +936,7 @@ describe("document identity", () => {
       screen.getByRole("tab", { name: "Chapters" }).getAttribute("aria-selected"),
     ).toBe("true");
 
+    await idle(); // creation finishes once its first chapter is read
     backend.savePicks.push("/Livros/livro-novo.epub");
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(title()).toBe("livro-novo"));
@@ -1053,16 +1101,297 @@ describe("drop overlay", () => {
     expect(overlay()).toBeNull();
   });
 
-  it("leaves image drops to the editor (no EPUB-only complaint while editing)", async () => {
+  it("inserts Finder image drops into the chapter being edited", async () => {
     const backend = mockBackend();
     await mount(backend);
     await openFromWelcome(backend, ALPHA);
+    // Chapter 3 edits as Markdown (image references need Markdown).
+    fireEvent.click(screen.getByRole("button", { name: "Next →" }));
+    await screen.findByText("chapter 2 of 3");
+    fireEvent.click(screen.getByRole("button", { name: "Next →" }));
+    await screen.findByText("chapter 3 of 3");
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    await screen.findByLabelText("chapter buffer");
+    const buffer = (await screen.findByLabelText(
+      "chapter buffer",
+    )) as HTMLTextAreaElement;
+    await waitFor(() => expect(buffer.value).not.toBe(""));
+    await act(() =>
+      emit("tauri://drag-drop", {
+        paths: ["/x/pic.png", "/x/notes.txt", "/x/Foto Café.JPG"],
+        position: POSITION,
+      }),
+    );
+    await waitFor(() =>
+      expect(buffer.value).toContain("![](../images/Foto Café.JPG)"),
+    );
+    expect(buffer.value).toContain("![](../images/pic.png)");
+    expect(
+      backend.calls
+        .filter((c) => c.cmd === "add_resource_from_path")
+        .map((c) => c.args.osPath),
+    ).toEqual(["/x/pic.png", "/x/Foto Café.JPG"]);
+    // No EPUB-only complaint, nothing opened.
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(count(backend, "open_book")).toBe(1);
+  });
+
+  it("ignores image drops outside the editor", async () => {
+    const backend = mockBackend();
+    await mount(backend);
+    await openFromWelcome(backend, ALPHA);
     await act(() =>
       emit("tauri://drag-drop", { paths: ["/x/pic.png"], position: POSITION }),
     );
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(count(backend, "open_book")).toBe(1);
+    expect(count(backend, "add_resource_from_path")).toBe(0);
+  });
+});
+
+// ---- Exits are never dead (Quit / red close mid-operation) -----------------
+
+describe("exit requests during a lifecycle operation", () => {
+  it("acknowledges each quit request with its id", async () => {
+    const backend = mockBackend();
+    await mount(backend);
+    await act(() => emit("app-quit-requested", 7));
+    await waitFor(() => expect(count(backend, "quit_app")).toBe(1));
+    expect(lastCall(backend, "ack_quit_request")?.args).toEqual({ request: 7 });
+  });
+
+  it("with nothing unsaved, Quit goes ahead while an open is pending", async () => {
+    const backend = mockBackend();
+    await mount(backend);
+    await openFromWelcome(backend, ALPHA);
+    const gate = deferred<void>();
+    backend.openGate = gate.promise;
+    await act(() => emit("open-files", [BETA]));
+    await waitFor(() => expect(opened(backend, BETA)).toBe(true));
+
+    await act(() => emit("app-quit-requested", 1));
+    await waitFor(() => expect(count(backend, "quit_app")).toBe(1));
+    expect(sheet()).toBeNull();
+    await act(async () => gate.resolve());
+  });
+
+  it("with nothing unsaved, Quit goes ahead while the picker is up", async () => {
+    const backend = mockBackend();
+    await mount(backend);
+    const picker = deferred<string | null>();
+    backend.openPicks.push(picker.promise);
+    fireEvent.click(screen.getByRole("button", { name: "Open Book…" }));
+    await waitFor(() => expect(count(backend, "plugin:dialog|open")).toBe(1));
+    await act(() => emit("app-quit-requested", 1));
+    await waitFor(() => expect(count(backend, "quit_app")).toBe(1));
+    await act(async () => picker.resolve(null));
+  });
+
+  it("with unsaved work, Quit waits for the operation, then runs the guard", async () => {
+    const backend = mockBackend();
+    await mount(backend);
+    await openFromWelcome(backend, ALPHA);
+    await makeDirty("core-dirty");
+    const picker = deferred<string | null>();
+    backend.openPicks.push(picker.promise);
+    fireEvent.keyDown(window, { key: "o", metaKey: true });
+    await waitFor(() => expect(count(backend, "plugin:dialog|open")).toBe(2));
+
+    await act(() => emit("app-quit-requested", 1));
+    // Remembered, not dropped — and nothing quits behind the picker.
+    expect(count(backend, "ack_quit_request")).toBe(1);
+    expect(count(backend, "quit_app")).toBe(0);
+    expect(sheet()).toBeNull();
+    // A repeat while that quit still waits is left unacknowledged, so the
+    // shell offers its native "Quit anyway?" if the operation is stuck.
+    await act(() => emit("app-quit-requested", 2));
+    expect(count(backend, "ack_quit_request")).toBe(1);
+
+    await act(async () => picker.resolve(null)); // open cancelled
+    const guard = await findSheet();
+    fireEvent.click(within(guard).getByRole("button", { name: "Don’t Save" }));
+    await waitFor(() => expect(count(backend, "quit_app")).toBe(1));
+  });
+
+  it("a second ⌘Q while the quit sheet is up stacks nothing; Cancel stays", async () => {
+    const backend = mockBackend();
+    await mount(backend);
+    await openFromWelcome(backend, ALPHA);
+    await makeDirty("core-dirty");
+    await act(() => emit("app-quit-requested", 1));
+    const guard = await findSheet();
+    await act(() => emit("app-quit-requested", 2));
+    expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+    expect(count(backend, "ack_quit_request")).toBe(2);
+    fireEvent.click(within(guard).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(sheet()).toBeNull());
+    await idle();
+    // Not re-run from a queue after Cancel.
+    expect(sheet()).toBeNull();
+    expect(count(backend, "quit_app")).toBe(0);
+  });
+
+  it("red close: clean closes mid-operation; dirty waits, then guards", async () => {
+    const backend = mockBackend();
+    await mount(backend);
+    await openFromWelcome(backend, ALPHA);
+    const gate = deferred<void>();
+    backend.openGate = gate.promise;
+    await act(() => emit("open-files", [BETA]));
+    await waitFor(() => expect(opened(backend, BETA)).toBe(true));
+    await act(() => emit("tauri://close-requested", null));
+    await waitFor(() => expect(count(backend, "plugin:window|destroy")).toBe(1));
+    await act(async () => gate.resolve());
+    await screen.findByText(titleFor(BETA));
+
+    await makeDirty("core-dirty");
+    const picker = deferred<string | null>();
+    backend.openPicks.push(picker.promise);
+    fireEvent.keyDown(window, { key: "o", metaKey: true });
+    await waitFor(() => expect(count(backend, "plugin:dialog|open")).toBe(1));
+    await act(() => emit("tauri://close-requested", null));
+    expect(count(backend, "plugin:window|destroy")).toBe(1);
+    await act(async () => picker.resolve(null));
+    const guard = await findSheet();
+    fireEvent.click(within(guard).getByRole("button", { name: "Don’t Save" }));
+    await waitFor(() => expect(count(backend, "plugin:window|destroy")).toBe(2));
+  });
+});
+
+// ---- Nothing changes behind a pending decision ----------------------------
+
+describe("edits during a pending lifecycle operation", () => {
+  async function editAlpha(backend: Backend): Promise<HTMLTextAreaElement> {
+    await openFromWelcome(backend, ALPHA);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const buffer = (await screen.findByLabelText(
+      "chapter buffer",
+    )) as HTMLTextAreaElement;
+    await waitFor(() => expect(buffer.value).not.toBe(""));
+    return buffer;
+  }
+
+  it("typing while open_book is pending: the editor is read-only, and a slipped-in edit re-runs the guard", async () => {
+    const backend = mockBackend();
+    await mount(backend);
+    const buffer = await editAlpha(backend);
+    expect(buffer.readOnly).toBe(false);
+
+    const gate = deferred<void>();
+    backend.openGate = gate.promise;
+    await act(() => emit("open-files", [BETA])); // clean: no guard
+    await waitFor(() => expect(opened(backend, BETA)).toBe(true));
+    expect(buffer.readOnly).toBe(true);
+    // Chapter management and navigation are inert too.
+    expect(
+      (screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Done" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    fireEvent.change(buffer, { target: { value: "typed while opening" } });
+    await act(async () => gate.resolve());
+
+    // The replacement was acquired, but the newer text is unsaved: ask.
+    const guard = await findSheet();
+    expect(count(backend, "close_book")).toBe(0);
+    fireEvent.click(within(guard).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(sheet()).toBeNull());
+    await idle();
+    // Still on alpha with the text; the acquired beta session was released.
+    screen.getByText(titleFor(ALPHA));
+    expect(
+      (screen.getByLabelText("chapter buffer") as HTMLTextAreaElement).value,
+    ).toBe("typed while opening");
+    expect(lastCall(backend, "close_book")?.args.bookId).toBe(`id:${BETA}`);
+    expect(buffer.readOnly).toBe(false);
+  });
+
+  it("typing during Save-then-Quit: read-only while saving, and newer text is guarded again", async () => {
+    const backend = mockBackend();
+    await mount(backend);
+    const buffer = await editAlpha(backend);
+    fireEvent.change(buffer, { target: { value: "first" } });
+
+    const gate = deferred<void>();
+    backend.saveGate = gate.promise;
+    await act(() => emit("app-quit-requested", 1));
+    fireEvent.click(within(await findSheet()).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(count(backend, "save_book")).toBe(1));
+    expect(buffer.readOnly).toBe(true);
+
+    fireEvent.change(buffer, { target: { value: "second" } });
+    await act(async () => gate.resolve());
+
+    const again = await findSheet();
+    expect(count(backend, "quit_app")).toBe(0);
+    fireEvent.click(within(again).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(count(backend, "quit_app")).toBe(1));
+    const writes = backend.calls.filter((c) => c.cmd === "write_chapter");
+    expect(
+      writes.map((c) => (c.args.content as { content: string }).content),
+    ).toEqual(["first", "second"]);
+    expect(count(backend, "save_book")).toBe(2);
+  });
+
+  it("chapter management and metadata are refused while frozen", async () => {
+    const backend = mockBackend();
+    await mount(backend);
+    await openFromWelcome(backend, ALPHA);
+    fireEvent.click(screen.getByRole("tab", { name: "Chapters" }));
+    const gate = deferred<void>();
+    backend.openGate = gate.promise;
+    await act(() => emit("open-files", [BETA]));
+    await waitFor(() => expect(opened(backend, BETA)).toBe(true));
+    for (const name of ["Add chapter…", "Next →"]) {
+      expect(
+        (screen.getByRole("button", { name }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+    }
+    expect(
+      (screen.getByRole("button", { name: "Edit metadata…" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    await act(async () => gate.resolve());
+    await screen.findByText(titleFor(BETA));
+  });
+});
+
+// ---- Navigation stays behind the active decision ---------------------------
+
+describe("chapter navigation during a decision", () => {
+  it("View ▸ Next Chapter and its shortcut do nothing while the sheet is up", async () => {
+    const backend = mockBackend();
+    await mount(backend);
+    await openFromWelcome(backend, ALPHA);
+    await makeDirty("editor-only");
+
+    backend.openPicks.push(BETA);
+    fireEvent.click(screen.getByRole("button", { name: "Open Book…" }));
+    const guard = await findSheet();
+    const state = () => lastCall(backend, "set_menu_state")?.args.state;
+    await waitFor(() =>
+      expect(state()).toEqual({ hasBook: true, editable: true, busy: true }),
+    );
+
+    await afterDedupeWindow();
+    await act(() => emit("app-menu", "next-chapter"));
+    fireEvent.keyDown(window, { key: "ArrowRight", altKey: true, metaKey: true });
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    fireEvent.keyDown(window, { key: "e", metaKey: true });
+
+    expect(screen.queryByRole("dialog", { name: "Unapplied changes" })).toBeNull();
+    expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+    expect(guard.contains(document.activeElement)).toBe(true);
+    screen.getByText("chapter 1 of 3");
+    expect(
+      backend.calls.filter(
+        (c) => c.cmd === "read_chapter" && c.args.resourceId === "ch2",
+      ),
+    ).toHaveLength(0);
+
+    fireEvent.click(within(guard).getByRole("button", { name: "Cancel" }));
+    await idle();
+    await waitFor(() =>
+      expect(state()).toEqual({ hasBook: true, editable: true, busy: false }),
+    );
   });
 });

@@ -23,6 +23,7 @@ import type { Book } from "@bindings/Book";
 import App from "../App";
 import {
   imageMarkdown,
+  isImagePath,
   needsUnsavedPrompt,
   relativeResourcePath,
   saveSteps,
@@ -222,6 +223,15 @@ describe("pure editing helpers", () => {
   it("saveSteps applies before saving only when the buffer is modified", () => {
     expect(saveSteps(true)).toEqual(["apply", "save"]);
     expect(saveSteps(false)).toEqual(["save"]);
+  });
+
+  it("isImagePath accepts the insertable image types only", () => {
+    expect(isImagePath("/x/Foto Café.JPG")).toBe(true);
+    expect(isImagePath("C:\\pics\\a.webp")).toBe(true);
+    expect(isImagePath("/x/a.svg")).toBe(true);
+    expect(isImagePath("/x/book.epub")).toBe(false);
+    expect(isImagePath("/x.png/readme")).toBe(false);
+    expect(isImagePath("/x/png")).toBe(false);
   });
 
   it("needsUnsavedPrompt fires on either pending layer", () => {

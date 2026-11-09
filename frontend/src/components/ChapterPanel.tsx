@@ -17,8 +17,15 @@ import { useKeepCurrentVisible } from "../lib/sidebarScroll";
  * M2.2 metadata dialog), so the mutation affordances are hidden for them.
  */
 export function ChapterPanel() {
-  const { book, spineIndex, goTo, addChapter, removeChapter, moveSpineItem } =
-    useReader();
+  const {
+    book,
+    spineIndex,
+    goTo,
+    addChapter,
+    removeChapter,
+    moveSpineItem,
+    frozen,
+  } = useReader();
   const [adding, setAdding] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   /** Spine item id awaiting removal confirmation (inline, no window.confirm). */
@@ -71,6 +78,7 @@ export function ChapterPanel() {
                 <button
                   type="button"
                   className="toc-link"
+                  disabled={frozen}
                   onClick={() => void goTo(i)}
                 >
                   {label}
@@ -87,7 +95,7 @@ export function ChapterPanel() {
                       data-size="sm"
                       data-icon
                       aria-label={`Move up: ${label}`}
-                      disabled={i === 0}
+                      disabled={frozen || i === 0}
                       onClick={() => void moveSpineItem(item.id, -1)}
                     >
                       ↑
@@ -99,7 +107,7 @@ export function ChapterPanel() {
                       data-size="sm"
                       data-icon
                       aria-label={`Move down: ${label}`}
-                      disabled={i === book.spine.length - 1}
+                      disabled={frozen || i === book.spine.length - 1}
                       onClick={() => void moveSpineItem(item.id, 1)}
                     >
                       ↓
@@ -111,6 +119,7 @@ export function ChapterPanel() {
                       data-size="sm"
                       data-icon
                       aria-label={`Remove: ${label}`}
+                      disabled={frozen}
                       onClick={() => setConfirming(item.id)}
                     >
                       ✕
@@ -125,6 +134,7 @@ export function ChapterPanel() {
                     type="button"
                     data-variant="destructive"
                     data-size="sm"
+                    disabled={frozen}
                     onClick={() => {
                       setConfirming(null);
                       void removeChapter(item.id);
@@ -154,7 +164,7 @@ export function ChapterPanel() {
               onChange={(e) => setNewTitle(e.target.value)}
               autoFocus
             />
-            <button type="submit" data-variant="primary">
+            <button type="submit" data-variant="primary" disabled={frozen}>
               Add
             </button>
             <button
@@ -171,6 +181,7 @@ export function ChapterPanel() {
           <button
             type="button"
             className="chapter-add-open"
+            disabled={frozen}
             onClick={() => setAdding(true)}
           >
             Add chapter…

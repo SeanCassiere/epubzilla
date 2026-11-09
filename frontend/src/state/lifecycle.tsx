@@ -12,6 +12,15 @@
 //  - one operation at a time: a lock held across picker, guard, save and
 //    acquisition; background entry points are ignored (or, for Finder,
 //    queued) while it is held or any modal is open;
+//  - nothing changes behind a decision: while the lock is held the reader
+//    is frozen (editor read-only, mutations and chapter navigation
+//    refused), edits already in flight settle before the guard looks, and
+//    the document revision is re-checked after the guard and before the
+//    previous book is released — newer changes re-run the guard;
+//  - Quit and the red close button are never dead: with nothing unsaved
+//    they go ahead even mid-operation; otherwise they wait for the
+//    operation and then run the guard. Quit requests are acknowledged at
+//    once so the shell can tell a live frontend from a hung one;
 //  - readable errors naming the file (lib/lifecycle.ts);
 //  - side effects on success: recents, native window title, menu state.
 //
@@ -33,7 +42,7 @@ import type { Metadata } from "@bindings/Metadata";
 import { useReader } from "./reader";
 import * as api from "../lib/api";
 import { pickEpubFile, pickSaveEpubPath, slugifyTitle } from "../lib/dialog";
-import { needsUnsavedPrompt } from "../lib/editing";
+import { isImagePath, needsUnsavedPrompt } from "../lib/editing";
 import {
   describeCreateError,
   describeOpenError,
@@ -64,6 +73,12 @@ import {
 
 /** The unsaved-changes sheet's three answers. */
 export type GuardChoice = "save" | "dont-save" | "cancel";
+
+/** What the lifecycle lock is held for (exit requests treat exits apart). */
+type OperationKind = "exit" | "other";
+
+/** An exit request waiting for the current operation to finish. */
+type QueuedExit = "quit" | "close";
 
 /**
  * Activity status threshold: like chapter loads (ReaderPane), typical
@@ -111,6 +126,12 @@ export interface LifecycleState {
 
 const LifecycleContext = createContext<LifecycleState | null>(null);
 
+/** saveLocked's answer: success, and the revision the save persisted. */
+interface SaveOutcome {
+  ok: boolean;
+  revision: number;
+}
+
 export function LifecycleProvider({ children }: { children: ReactNode }) {
   const reader = useReader();
   const readerRef = useRef(reader);
@@ -130,25 +151,49 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
   const [recents, setRecents] = useState<string[]>([]);
   const [dropActive, setDropActive] = useState(false);
   const [queuedPath, setQueuedPath] = useState<string | null>(null);
-  const [createdBookId, setCreatedBookId] = useState<string | null>(null);
+  const [queuedExit, setQueuedExitState] = useState<QueuedExit | null>(null);
+  const queuedExitRef = useRef<QueuedExit | null>(null);
+  const setQueuedExit = useCallback((next: QueuedExit | null) => {
+    queuedExitRef.current = next;
+    setQueuedExitState(next);
+  }, []);
+  const operationRef = useRef<OperationKind | null>(null);
   const modalOpen = useSyncExternalStore(subscribeModals, anyModalOpen);
 
-  /** Run `task` holding the lifecycle lock; refuses if already held. */
+  /**
+   * Run `task` holding the lifecycle lock; refuses if already held. The
+   * reader is frozen for the whole operation, and mutations already in
+   * flight settle before `task` looks at the document.
+   */
   const exclusive = useCallback(
-    async <T,>(task: () => Promise<T>): Promise<T | undefined> => {
+    async <T,>(
+      task: () => Promise<T>,
+      kind: OperationKind = "other",
+    ): Promise<T | undefined> => {
       if (lockRef.current) return undefined;
       lockRef.current = true;
+      operationRef.current = kind;
+      readerRef.current.setFrozen(true);
       setBusy(true);
       try {
+        await readerRef.current.settle();
         return await task();
       } finally {
         lockRef.current = false;
+        operationRef.current = null;
+        readerRef.current.setFrozen(false);
         setBusy(false);
         setActivity(null);
       }
     },
     [],
   );
+
+  /** Unsaved work right now: dirty book or unapplied editor buffer. */
+  const hasUnsaved = useCallback((): boolean => {
+    const { book, editorBufferModified } = readerRef.current;
+    return book !== null && needsUnsavedPrompt(book.dirty, editorBufferModified());
+  }, []);
 
   // ---- recents ---------------------------------------------------------
 
@@ -171,10 +216,13 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
    * was persisted; any failure or cancel leaves all changes in place.
    */
   const saveLocked = useCallback(
-    async (alwaysPrompt: boolean): Promise<boolean> => {
+    async (alwaysPrompt: boolean): Promise<SaveOutcome> => {
+      const failed: SaveOutcome = { ok: false, revision: 0 };
       const book = readerRef.current.book;
-      if (book === null || book.epub_version !== "V3") return false;
-      if (!(await readerRef.current.applyEditorBuffer())) return false;
+      if (book === null || book.epub_version !== "V3") return failed;
+      if (!(await readerRef.current.applyEditorBuffer())) return failed;
+      // What this save persists: anything newer than this is still unsaved.
+      const revision = readerRef.current.revision();
       const inPlace = !alwaysPrompt && book.source !== null;
       let path: string | undefined;
       if (!inPlace) {
@@ -188,48 +236,82 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
             message: "The save dialog couldn’t be opened.",
             details: rawError(err),
           });
-          return false;
+          return failed;
         }
-        if (picked === null) return false;
+        if (picked === null) return failed;
         path = picked;
       }
       setActivity("Saving…");
       const result = await readerRef.current.saveBook(path);
       if (!result.ok) {
         setNotice(describeSaveError(result.error, path ?? book.source, inPlace));
-        return false;
+        return failed;
       }
       setNotice(null);
       if (path !== undefined) addRecent(path);
-      return true;
+      return { ok: true, revision };
     },
     [addRecent],
   );
 
   /**
    * The unsaved-changes guard. Resolves true when the transition may
-   * proceed: nothing pending, "Don't Save", or a successful Save.
+   * proceed: nothing pending, "Don't Save", or a successful Save. If the
+   * document changed after the decision was made or the save took its
+   * snapshot, the guard asks again rather than lose those changes.
+   * `force` asks even when the reader's state does not (yet) look dirty.
    */
-  const passGuardLocked = useCallback(async (): Promise<boolean> => {
-    const { book, editorBufferModified } = readerRef.current;
-    if (book === null) return true;
-    if (!needsUnsavedPrompt(book.dirty, editorBufferModified())) return true;
-    const choice = await new Promise<GuardChoice>((resolve) => {
-      setGuard({ title: book.metadata.title, resolve });
-    });
-    setGuard(null);
-    if (choice === "cancel") return false;
-    if (choice === "dont-save") return true;
-    return saveLocked(false);
-  }, [saveLocked]);
+  const passGuardLocked = useCallback(
+    async (force = false): Promise<boolean> => {
+      let ask = force;
+      for (;;) {
+        const { book, revision } = readerRef.current;
+        if (book === null) return true;
+        if (!ask && !hasUnsaved()) return true;
+        const before = revision();
+        const choice = await new Promise<GuardChoice>((resolve) => {
+          setGuard({ title: book.metadata.title, resolve });
+        });
+        setGuard(null);
+        if (choice === "cancel") return false;
+        if (choice === "dont-save") {
+          if (revision() === before) return true;
+        } else {
+          const saved = await saveLocked(false);
+          if (!saved.ok) return false;
+          if (revision() === saved.revision) return true;
+        }
+        ask = true; // changed meanwhile: those changes are unsaved
+      }
+    },
+    [hasUnsaved, saveLocked],
+  );
+
+  /**
+   * After the guard passed: options for openBook/createBook that re-check
+   * the document revision once the replacement was acquired and before the
+   * current book is released, re-running the guard on newer changes.
+   */
+  const confirmUnchangedSince = useCallback(
+    (revision: number) => ({
+      confirm: async () =>
+        readerRef.current.revision() === revision || passGuardLocked(true),
+    }),
+    [passGuardLocked],
+  );
 
   const openLocked = useCallback(
     async (path: string): Promise<void> => {
       // Reselecting the open file is not a Revert: no prompt, no reload.
       if (samePath(readerRef.current.book?.source ?? null, path)) return;
       if (!(await passGuardLocked())) return;
+      const revision = readerRef.current.revision();
       setActivity(`Opening “${fileName(path)}”…`);
-      const result = await readerRef.current.openBook(path);
+      const result = await readerRef.current.openBook(
+        path,
+        confirmUnchangedSince(revision),
+      );
+      if (!result.ok && result.cancelled === true) return;
       if (result.ok) {
         setNotice(null);
         addRecent(path);
@@ -238,7 +320,7 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
         if (isNotFound(result.error)) removeRecent(path);
       }
     },
-    [passGuardLocked, addRecent, removeRecent],
+    [passGuardLocked, confirmUnchangedSince, addRecent, removeRecent],
   );
 
   // ---- entry points ----------------------------------------------------
@@ -285,11 +367,6 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
     [requestOpen],
   );
 
-  useEffect(() => {
-    if (queuedPath === null || busy || modalOpen) return;
-    setQueuedPath(null);
-    requestOpen(queuedPath);
-  }, [queuedPath, busy, modalOpen, requestOpen]);
 
   const requestNew = useCallback(() => {
     if (lockRef.current || anyModalOpen()) return;
@@ -306,18 +383,21 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
       void exclusive(async () => {
         // Guard Cancel returns to the form with its input intact.
         if (!(await passGuardLocked())) return;
+        const revision = readerRef.current.revision();
         setActivity("Creating book…");
-        const result = await readerRef.current.createBook(metadata);
+        const result = await readerRef.current.createBook(
+          metadata,
+          confirmUnchangedSince(revision),
+        );
         if (result.ok) {
-          setCreatedBookId(result.book.id);
           setNewBookDialog(null);
           setNotice(null);
-        } else {
+        } else if (result.cancelled !== true) {
           setNewBookDialog({ error: describeCreateError(result.error) });
         }
       });
     },
-    [exclusive, passGuardLocked],
+    [exclusive, passGuardLocked, confirmUnchangedSince],
   );
 
   const requestClose = useCallback(() => {
@@ -332,9 +412,60 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
 
   const save = useCallback(
     async (alwaysPrompt = false): Promise<boolean> =>
-      (await exclusive(() => saveLocked(alwaysPrompt))) ?? false,
+      (await exclusive(() => saveLocked(alwaysPrompt)))?.ok ?? false,
     [exclusive, saveLocked],
   );
+
+  /**
+   * ⌘Q / Quit. Never dead: idle → guard, then quit; mid-operation with
+   * nothing unsaved → quit now; mid-operation with unsaved work → run
+   * once the operation finishes. A quit or window close already deciding
+   * absorbs repeats (its sheet is on screen).
+   *
+   * Returns false only when a quit is already queued behind an operation
+   * that has not finished: that request is left unacknowledged, so the
+   * shell offers its native "Quit anyway?" prompt instead of waiting on an
+   * operation that may never end.
+   */
+  const requestQuit = useCallback((): boolean => {
+    if (lockRef.current) {
+      if (operationRef.current === "exit") return true;
+      if (!hasUnsaved()) {
+        void api.quitApp().catch(() => undefined);
+        return true;
+      }
+      if (queuedExitRef.current === "quit") return false;
+      setQueuedExit("quit");
+      return true;
+    }
+    void exclusive(async () => {
+      if (await passGuardLocked()) await api.quitApp().catch(() => undefined);
+    }, "exit");
+    return true;
+  }, [exclusive, hasUnsaved, passGuardLocked, setQueuedExit]);
+
+  /** Red close button with unsaved work: guard, then destroy the window. */
+  const closeWindowGuarded = useCallback(() => {
+    void exclusive(async () => {
+      if (await passGuardLocked()) await destroyWindow();
+    }, "exit");
+  }, [exclusive, passGuardLocked]);
+
+  // Exit requests that arrived mid-operation run as soon as it finishes
+  // (before any queued Finder open: the user asked to leave).
+  useEffect(() => {
+    if (queuedExit === null || busy) return;
+    setQueuedExit(null);
+    if (queuedExit === "quit") requestQuit();
+    else if (hasUnsaved()) closeWindowGuarded();
+    else void destroyWindow();
+  }, [queuedExit, busy, setQueuedExit, requestQuit, closeWindowGuarded, hasUnsaved]);
+
+  useEffect(() => {
+    if (queuedPath === null || queuedExit !== null || busy || modalOpen) return;
+    setQueuedPath(null);
+    requestOpen(queuedPath);
+  }, [queuedPath, queuedExit, busy, modalOpen, requestOpen]);
 
   const resolveGuard = useCallback(
     (choice: GuardChoice) => guard?.resolve(choice),
@@ -377,8 +508,20 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
   );
 
   // Latest handlers for the long-lived native listeners below.
-  const handlersRef = useRef({ openPaths, requestOpen, exclusive, passGuardLocked });
-  handlersRef.current = { openPaths, requestOpen, exclusive, passGuardLocked };
+  const handlersRef = useRef({
+    openPaths,
+    requestOpen,
+    requestQuit,
+    closeWindowGuarded,
+    hasUnsaved,
+  });
+  handlersRef.current = {
+    openPaths,
+    requestOpen,
+    requestQuit,
+    closeWindowGuarded,
+    hasUnsaved,
+  };
 
   // Shell events: register listeners FIRST, then fetch paths the OS sent
   // before we were listening (Finder cold start) — no gap either way.
@@ -387,12 +530,15 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
     const subscriptions = Promise.all([
       onOpenFiles((paths) => handlersRef.current.openPaths(paths)),
       onRecentBooksChanged(setRecents),
-      onQuitRequested(() => {
-        const { exclusive: run, passGuardLocked: passGuard } =
-          handlersRef.current;
-        void run(async () => {
-          if (await passGuard()) await api.quitApp().catch(() => undefined);
-        });
+      onQuitRequested((request) => {
+        // Acknowledge at once (the guard may take a while): the shell
+        // treats an unacknowledged request as a hung webview and asks
+        // natively — which is also what a repeat ⌘Q behind a stuck
+        // operation should get (see requestQuit).
+        const accepted = handlersRef.current.requestQuit();
+        if (accepted && request !== null) {
+          api.ackQuitRequest(request).catch(() => undefined);
+        }
       }),
     ]);
     void subscriptions.then(() => {
@@ -408,13 +554,17 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
     });
     return () => {
       disposed = true;
+      // Nobody will answer quit requests or take Finder opens now.
+      api.detachFrontend().catch(() => undefined);
       void subscriptions.then((stops) => stops.forEach((stop) => stop()));
     };
   }, []);
 
   // OS file drags: overlay while an .epub hovers, open on drop. Ignored
-  // while a decision is pending. Image drops in the editor are left to the
-  // editor (no "EPUB only" complaint while editing).
+  // while a decision is pending. While editing, dropped image files go
+  // into the chapter through the editor's insert-image path: the native
+  // webview intercepts Finder drops, so the editor's own HTML5 drop
+  // handler never sees them (no "EPUB only" complaint while editing).
   useEffect(() => {
     const accepting = () => !lockRef.current && !anyModalOpen();
     const unlisten = onFileDragDrop((event) => {
@@ -428,6 +578,12 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
         case "drop": {
           setDropActive(false);
           if (!accepting()) return;
+          const reader = readerRef.current;
+          if (reader.editing && !event.paths.some(isEpubPath)) {
+            const images = event.paths.filter(isImagePath);
+            if (images.length > 0) void reader.insertEditorImages(images);
+            return;
+          }
           const pick = firstEpub(event.paths);
           if (pick === null) return;
           if ("error" in pick) {
@@ -448,23 +604,18 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // Red close button: clean → closes; dirty → guard, then destroy (which
-  // skips close-requested, so the guard never re-triggers itself).
+  // Red close button: clean → closes (even mid-operation); dirty → guard,
+  // then destroy (which skips close-requested, so the guard never
+  // re-triggers itself). Mid-operation with unsaved work, the close waits
+  // for the operation and then runs the guard.
   useEffect(() => {
     const unlisten = onCloseRequested((event) => {
-      if (lockRef.current) {
-        event.preventDefault();
-        return;
-      }
-      const { book, editorBufferModified } = readerRef.current;
-      const pending =
-        book !== null && needsUnsavedPrompt(book.dirty, editorBufferModified());
-      if (interceptClose(pending, event)) {
-        const { exclusive: run, passGuardLocked: passGuard } =
-          handlersRef.current;
-        void run(async () => {
-          if (await passGuard()) await destroyWindow();
-        });
+      const handlers = handlersRef.current;
+      if (!interceptClose(handlers.hasUnsaved(), event)) return;
+      if (!lockRef.current) {
+        handlers.closeWindowGuarded();
+      } else if (operationRef.current !== "exit") {
+        if (queuedExitRef.current === null) setQueuedExit("close");
       }
     });
     return () => {
@@ -516,7 +667,7 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
       save,
       clearRecents,
       dropActive,
-      createdBookId,
+      createdBookId: reader.createdBookId,
     }),
     [
       busy,
@@ -537,7 +688,7 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
       save,
       clearRecents,
       dropActive,
-      createdBookId,
+      reader.createdBookId,
     ],
   );
 

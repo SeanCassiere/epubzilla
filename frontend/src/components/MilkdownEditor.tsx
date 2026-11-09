@@ -14,8 +14,8 @@ import "@milkdown/kit/prose/tables/style/tables.css";
 import {
   Editor,
   defaultValueCtx,
-  editorViewOptionsCtx,
   editorViewCtx,
+  editorViewOptionsCtx,
   rootCtx,
 } from "@milkdown/kit/core";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
@@ -149,9 +149,16 @@ export function MilkdownEditor({
   insertImageRef,
   resolveUrl,
   onPasteImage,
+  readOnly = false,
 }: {
   value: string;
   onChange: (next: string) => void;
+  /**
+   * Lifecycle freeze: no edits (typing, toolbar, paste/drop) while a
+   * lifecycle operation is pending. Focus is given back when editing
+   * resumes if the editor had it.
+   */
+  readOnly?: boolean;
   /** Test hook: called with the live editor once created. */
   onReady?: (editor: Editor) => void;
   /** M3.3: renders an "Insert image…" toolbar button running this flow. */
@@ -194,6 +201,8 @@ export function MilkdownEditor({
   resolveUrlRef.current = resolveUrl;
   const onPasteImageRef = useRef(onPasteImage);
   onPasteImageRef.current = onPasteImage;
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
 
   // Persist pasted/dropped image files and insert their refs at the cursor.
   // Sequential on purpose: each insert lands at the selection left by the
@@ -202,7 +211,7 @@ export function MilkdownEditor({
     void (async () => {
       for (const file of files) {
         const handler = onPasteImageRef.current;
-        if (handler === undefined) return;
+        if (handler === undefined || readOnlyRef.current) return;
         let bytes: Uint8Array;
         try {
           bytes = new Uint8Array(await file.arrayBuffer());
@@ -259,6 +268,7 @@ export function MilkdownEditor({
         // src re-resolve automatically.
         ctx.update(editorViewOptionsCtx, (prev) => ({
           ...prev,
+          editable: () => !readOnlyRef.current,
           // Clipboard/drop image persistence (#54): image payloads are
           // consumed here — persisted as book resources, then inserted as
           // zip-relative refs — so ProseMirror's default handling never
@@ -366,6 +376,23 @@ export function MilkdownEditor({
     };
   }, [insertImageRef]);
 
+  // Lifecycle freeze: re-evaluate `editable` now (ProseMirror reads it on
+  // update) and hand focus back afterwards.
+  const hadFocusRef = useRef(false);
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (editor === null) return;
+    editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      if (readOnly) hadFocusRef.current = view.hasFocus();
+      view.setProps({ editable: () => !readOnlyRef.current });
+      if (!readOnly && hadFocusRef.current) {
+        hadFocusRef.current = false;
+        view.focus();
+      }
+    });
+  }, [readOnly]);
+
   // External value replacement (buffer reload) — no-op for the editor's own
   // edits, which already set heldRef via the markdownUpdated listener. After
   // a push, hold the *serialized* form of the new document so the listener's
@@ -390,10 +417,11 @@ export function MilkdownEditor({
             data-size="sm"
             title={action.title}
             aria-label={action.title}
+            disabled={readOnly}
             onMouseDown={(e) => e.preventDefault() /* keep the selection */}
             onClick={() => {
               const editor = editorRef.current;
-              if (editor !== null) action.run(editor);
+              if (editor !== null && !readOnlyRef.current) action.run(editor);
             }}
           >
             {action.label}
@@ -420,6 +448,7 @@ export function MilkdownEditor({
             data-variant="plain"
             data-size="sm"
             title="Add an image to the book and reference it at the cursor"
+            disabled={readOnly}
             onMouseDown={(e) => e.preventDefault() /* keep the selection */}
             onClick={onInsertImage}
           >
