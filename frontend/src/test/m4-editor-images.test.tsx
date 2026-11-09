@@ -17,7 +17,7 @@
 // parse/serialize (also pinned below), but rendered invisibly because
 // its relative src could not load.
 
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import type { MutableRefObject } from "react";
 import { createRef } from "react";
@@ -25,6 +25,8 @@ import { editorViewCtx, type Editor } from "@milkdown/kit/core";
 import { Slice } from "@milkdown/kit/prose/model";
 import { getMarkdown } from "@milkdown/kit/utils";
 import { MilkdownEditor, type PastedImage } from "../components/MilkdownEditor";
+
+beforeEach(() => { vi.spyOn(window, "prompt").mockReturnValue(""); });
 
 beforeAll(() => {
   // jsdom lacks layout; ProseMirror needs these to mount.
@@ -34,7 +36,7 @@ beforeAll(() => {
     ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }) as DOMRect;
 });
 
-afterEach(() => cleanup());
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 /** The resolver EditorPane provides, faked: relative ref → epub:// URL. */
 const resolve = (src: string) =>
@@ -46,7 +48,7 @@ async function mount(
   value: string,
   options: {
     onChange?: (next: string) => void;
-    insertImageRef?: MutableRefObject<((src: string) => void) | null>;
+    insertImageRef?: MutableRefObject<((src: string, alt?: string) => void) | null>;
     resolveUrl?: (src: string) => string;
     onPasteImage?: (image: PastedImage) => Promise<string | null>;
   } = {},
@@ -104,19 +106,19 @@ describe("editor image rendering (#52)", () => {
   });
 
   it("inserts a relative ref at the cursor and serializes it unresolved", async () => {
-    const insertImageRef = createRef<((src: string) => void) | null>();
+    const insertImageRef = createRef<((src: string, alt?: string) => void) | null>();
     let latest = "";
     const { editor } = await mount("Some text.\n", {
       onChange: (next) => {
         latest = next;
       },
       insertImageRef: insertImageRef as MutableRefObject<
-        ((src: string) => void) | null
+        ((src: string, alt?: string) => void) | null
       >,
       resolveUrl: resolve,
     });
     await waitFor(() => expect(insertImageRef.current).not.toBeNull());
-    insertImageRef.current!("../images/new.png");
+    insertImageRef.current!("../images/new.png", "A [new] picture");
 
     await waitFor(() => expect(latest).toContain("../images/new.png"));
     expect(latest).not.toContain("epub://");
@@ -124,6 +126,7 @@ describe("editor image rendering (#52)", () => {
     expect(hostImg()!.getAttribute("src")).toBe(
       "epub://book-1/OEBPS/images/new.png",
     );
+    expect(hostImg()!.alt).toBe("A [new] picture");
     expect(editor.action(getMarkdown())).toBe(latest);
   });
 
@@ -206,6 +209,23 @@ describe("pasted image persistence (#54)", () => {
     expect(hostImg()!.getAttribute("src")).toBe(
       "epub://book-1/OEBPS/images/pasted-image.png",
     );
+  });
+
+  it("asks for alt text on paste and preserves it in the image node", async () => {
+    vi.mocked(window.prompt).mockReturnValue("Pasted [diagram]");
+    await mount("Text.\n", { onPasteImage: async () => "../images/pasted.png" });
+    proseMirrorHost().dispatchEvent(pasteEvent({ files: [pngFile("shot.png")] }));
+    await waitFor(() => expect(hostImg()?.alt).toBe("Pasted [diagram]"));
+  });
+
+  it("cancelling alt text skips persistence and insertion", async () => {
+    vi.mocked(window.prompt).mockReturnValue(null);
+    const onPasteImage = vi.fn(async () => "../images/pasted.png");
+    await mount("Text.\n", { onPasteImage });
+    proseMirrorHost().dispatchEvent(pasteEvent({ files: [pngFile("shot.png")] }));
+    await waitFor(() => expect(window.prompt).toHaveBeenCalled());
+    expect(onPasteImage).not.toHaveBeenCalled();
+    expect(hostImg()).toBeNull();
   });
 
   it("lets non-image paste fall through to normal handling", async () => {

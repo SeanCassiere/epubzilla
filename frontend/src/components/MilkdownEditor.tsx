@@ -3,12 +3,10 @@
 // buffer state lives in EditorPane; the interchange format is always the
 // Markdown STRING (the Rust core does all XHTML conversion).
 //
-// Contract syntax Milkdown does not model — Pandoc-style footnotes ([^1])
-// and {.class} annotations — renders as literal text here (accepted
-// ADR-0007 consequence). Verified by src/test/m3-milkdown.test.tsx: the
-// serializer passes both through VERBATIM (no escaping, no loss), so no
-// fallback gating is needed; the raw Markdown mode remains available for
-// editing them comfortably.
+// GFM models footnotes, tasks, titles and aligned tables. Heading attributes
+// and {.class} annotations remain editable literal syntax. The conversion
+// extensions preserve alerts and intentional empty paragraphs; real-editor
+// parity tests cover every construct after an unrelated edit.
 
 import { useEffect, useRef, type MutableRefObject } from "react";
 import "@milkdown/kit/prose/view/style/prosemirror.css";
@@ -17,6 +15,7 @@ import {
   Editor,
   defaultValueCtx,
   editorViewOptionsCtx,
+  editorViewCtx,
   rootCtx,
 } from "@milkdown/kit/core";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
@@ -26,6 +25,7 @@ import {
   createCodeBlockCommand,
   insertHrCommand,
   insertImageCommand,
+  remarkPreserveEmptyLinePlugin,
   toggleEmphasisCommand,
   toggleLinkCommand,
   toggleStrongCommand,
@@ -42,6 +42,11 @@ import {
 import { history } from "@milkdown/kit/plugin/history";
 import { listener, listenerCtx } from "@milkdown/kit/plugin/listener";
 import { callCommand, getMarkdown, replaceAll } from "@milkdown/kit/utils";
+import { promptImageAlt, type InsertImage } from "../lib/editing";
+import {
+  configureConversionSchemas,
+  remarkConversion,
+} from "../lib/milkdown-conversion";
 
 /**
  * An image arriving via clipboard paste or drag-and-drop (issue #54): the
@@ -164,7 +169,7 @@ export function MilkdownEditor({
    * for `src` at the cursor (EditorPane's insert-image flow calls it after
    * add_resource_from_path).
    */
-  insertImageRef?: MutableRefObject<((src: string) => void) | null>;
+  insertImageRef?: MutableRefObject<InsertImage | null>;
   /**
    * Issue #52: render-time URL resolver for image sources. The DOCUMENT
    * keeps whatever the Markdown says (zip-relative refs like
@@ -211,6 +216,8 @@ export function MilkdownEditor({
         } catch {
           continue; // unreadable payload: skip it, keep the rest
         }
+        const alt = promptImageAlt();
+        if (alt === null) continue;
         const src = await handler({
           name: file.name,
           type: file.type,
@@ -219,7 +226,7 @@ export function MilkdownEditor({
         if (src === null) continue;
         const editor = editorRef.current;
         if (editor === null) return;
-        editor.action(callCommand(insertImageCommand.key, { src }));
+        editor.action(callCommand(insertImageCommand.key, { src, alt }));
       }
     })();
   };
@@ -231,6 +238,7 @@ export function MilkdownEditor({
   // loops: pushes must never re-emit (a mode switch or buffer reload is not
   // a user edit and must not dirty the buffer).
   const heldRef = useRef(value);
+  const heldDocumentRef = useRef<ProseNode | null>(null);
   const initialValueRef = useRef(value);
   initialValueRef.current = value;
 
@@ -241,9 +249,11 @@ export function MilkdownEditor({
     let destroyed = false;
     const editor = Editor.make()
       .config((ctx) => {
+        configureConversionSchemas(ctx);
         ctx.set(rootCtx, host);
         ctx.set(defaultValueCtx, initialValueRef.current);
-        ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
+        ctx.get(listenerCtx).markdownUpdated((ctx, markdown) => {
+          heldDocumentRef.current = ctx.get(editorViewCtx).state.doc;
           if (markdown === heldRef.current) return;
           heldRef.current = markdown;
           onChangeRef.current(markdown);
@@ -306,7 +316,7 @@ export function MilkdownEditor({
               const src = String(node.attrs.src ?? "");
               img.src = resolveUrlRef.current?.(src) ?? src;
               const alt = String(node.attrs.alt ?? "");
-              if (alt !== "") img.alt = alt;
+              img.alt = alt;
               const title = String(node.attrs.title ?? "");
               if (title !== "") img.title = title;
               return { dom: img };
@@ -314,8 +324,12 @@ export function MilkdownEditor({
           },
         }));
       })
-      .use(commonmark)
+      .use(commonmark.filter(
+        (plugin) => plugin !== remarkPreserveEmptyLinePlugin.plugin &&
+          plugin !== remarkPreserveEmptyLinePlugin.options,
+      ))
       .use(gfm)
+      .use(remarkConversion)
       .use(history)
       .use(listener);
     void editor.create().then(() => {
@@ -324,11 +338,23 @@ export function MilkdownEditor({
         return;
       }
       editorRef.current = editor;
+      heldDocumentRef.current = editor.ctx.get(editorViewCtx).state.doc;
       onReadyRef.current?.(editor);
     });
     return () => {
       destroyed = true;
+      // Milkdown debounces markdownUpdated by 200 ms. A fast mode switch
+      // must flush a real pending edit, but never normalize an untouched
+      // buffer just because the component unmounts.
+      if (editorRef.current === editor) {
+        const doc = editor.ctx.get(editorViewCtx).state.doc;
+        if (heldDocumentRef.current && !doc.eq(heldDocumentRef.current)) {
+          const markdown = editor.action(getMarkdown());
+          if (markdown !== heldRef.current) onChangeRef.current(markdown);
+        }
+      }
       editorRef.current = null;
+      heldDocumentRef.current = null;
       void editor.destroy();
     };
   }, []);
@@ -337,10 +363,10 @@ export function MilkdownEditor({
   // cursor; the markdownUpdated listener reports the change upward.
   useEffect(() => {
     if (insertImageRef === undefined) return;
-    insertImageRef.current = (src: string) => {
+    insertImageRef.current = (src, alt = "") => {
       const editor = editorRef.current;
       if (editor === null) return;
-      editor.action(callCommand(insertImageCommand.key, { src }));
+      editor.action(callCommand(insertImageCommand.key, { src, alt }));
     };
     return () => {
       insertImageRef.current = null;
@@ -356,6 +382,7 @@ export function MilkdownEditor({
     if (editor !== null && value !== heldRef.current) {
       editor.action(replaceAll(value));
       heldRef.current = editor.action(getMarkdown());
+      heldDocumentRef.current = editor.ctx.get(editorViewCtx).state.doc;
     }
   }, [value]);
 

@@ -51,7 +51,19 @@ export function relativeResourcePath(fromPath: string, toPath: string): string {
   return [...Array<string>(ups).fill(".."), ...toParts.slice(common)].join("/");
 }
 
-/** Markdown image reference for an inserted resource (empty alt text). */
-export function imageMarkdown(relativePath: string): string {
-  return `![](${relativePath})`;
+/** Shared cursor insertion contract; an empty alt describes decoration. */
+export type InsertImage = (src: string, alt?: string) => void;
+
+export function promptImageAlt(): string | null {
+  return window.prompt("Image alt text (leave empty for a decorative image):", "");
+}
+
+/** Keep labels literal and destinations intact through CommonMark parsing. */
+export function imageMarkdown(relativePath: string, alt = ""): string {
+  const label = alt.replace(/\r?\n/g, " ").replace(/[\\[\]`*_~&<>]/g, "\\$&");
+  const path = relativePath
+    .replace(/[\r\n]/g, (char) => encodeURIComponent(char))
+    .replace(/[\\<>&]/g, "\\$&");
+  const destination = /[\s()<>]/.test(relativePath) ? `<${path}>` : path;
+  return `![${label}](${destination})`;
 }
