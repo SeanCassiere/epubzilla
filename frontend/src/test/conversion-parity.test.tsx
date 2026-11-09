@@ -375,7 +375,7 @@ describe("app-owned prompts in the real editor", () => {
     await waitFor(() => expect(document.querySelector(mode === "source" ? ".cm-editor" : ".milkdown-host .ProseMirror")).not.toBeNull());
     fireEvent.click(screen.getByRole("button", { name: "Insert image…" }));
     const input = await screen.findByRole("textbox", { name: /Alt text/ });
-    expect(document.activeElement).toBe(input);
+    await waitFor(() => expect(document.activeElement).toBe(input));
     expect(reader.addResource).not.toHaveBeenCalled();
     const alt = mode === "source" ? "" : "A [diagram] &copy;";
     fireEvent.change(input, { target: { value: alt } });
@@ -404,7 +404,7 @@ describe("app-owned prompts in the real editor", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Link (toggles on the selection)" }));
     const input = await screen.findByRole("textbox", { name: "Link target (href)" });
-    expect(document.activeElement).toBe(input);
+    await waitFor(() => expect(document.activeElement).toBe(input));
     expect(screen.getByRole("dialog").getAttribute("aria-modal")).toBe("true");
     fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
     const ok = screen.getByRole("button", { name: "OK" });
