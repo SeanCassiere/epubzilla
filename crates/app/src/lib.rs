@@ -34,6 +34,7 @@ pub fn run() {
             };
             let (menu, handles) = menu::build(app.handle(), recents.entries())?;
             app.set_menu(menu)?;
+            menu::register_window_menu(&handles)?;
             app.manage(handles);
             app.manage(Mutex::new(recents) as SharedRecents);
             Ok(())
