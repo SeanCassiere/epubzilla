@@ -27,6 +27,7 @@ import { pickImageFile } from "../lib/dialog";
 import { CodeEditor } from "./CodeEditor";
 import { MilkdownEditor, type PastedImage } from "./MilkdownEditor";
 import { useTextPrompt } from "./PromptDialog";
+import { richModeUnavailableReason } from "../lib/rich-mode";
 
 type PendingLeave = { resolve: (proceed: boolean) => void } | null;
 
@@ -93,6 +94,15 @@ export function EditorPane() {
   const [applying, setApplying] = useState(false);
   const [pendingLeave, setPendingLeave] = useState<PendingLeave>(null);
   const [markdownMode, setMarkdownMode] = useState<MarkdownMode>(storedMode);
+  const richModeReason = format === "Markdown" && buffer !== null
+    ? richModeUnavailableReason(buffer) : null;
+  const effectiveMode = richModeReason === null ? markdownMode : "source";
+
+  // Once forced into source, stay there while the user repairs labels. Rich
+  // mode becomes available again without replacing the focused source editor.
+  useEffect(() => {
+    if (richModeReason !== null) setMarkdownMode("source");
+  }, [richModeReason]);
 
   const chooseMode = useCallback((mode: MarkdownMode) => {
     setMarkdownMode(mode);
@@ -263,14 +273,16 @@ export function EditorPane() {
           >
             <button
               type="button"
-              aria-pressed={markdownMode === "wysiwyg"}
+              aria-pressed={effectiveMode === "wysiwyg"}
+              disabled={richModeReason !== null}
+              aria-describedby={richModeReason !== null ? "rich-mode-reason" : undefined}
               onClick={() => chooseMode("wysiwyg")}
             >
               WYSIWYG
             </button>
             <button
               type="button"
-              aria-pressed={markdownMode === "source"}
+              aria-pressed={effectiveMode === "source"}
               onClick={() => chooseMode("source")}
             >
               Markdown
@@ -286,7 +298,12 @@ export function EditorPane() {
             edited as XHTML source to avoid losing anything.
           </span>
         )}
-        {format === "Markdown" && markdownMode === "source" && (
+        {richModeReason !== null && (
+          <span id="rich-mode-reason" className="editor-notice" role="status">
+            {richModeReason}
+          </span>
+        )}
+        {format === "Markdown" && effectiveMode === "source" && (
           <button
             type="button"
             onClick={() => void handleInsertImage()}
@@ -316,7 +333,7 @@ export function EditorPane() {
         <p className="status" role="status">
           Loading chapter…
         </p>
-      ) : format === "Markdown" && markdownMode === "wysiwyg" ? (
+      ) : format === "Markdown" && effectiveMode === "wysiwyg" ? (
         <MilkdownEditor
           value={buffer}
           onChange={setBuffer}

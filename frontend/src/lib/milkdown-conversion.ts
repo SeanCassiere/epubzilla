@@ -1,8 +1,32 @@
 // Editor-only extensions for the Markdown contract. XHTML remains core-owned.
 import type { Ctx } from "@milkdown/kit/ctx";
+import { remarkStringifyOptionsCtx } from "@milkdown/kit/core";
 import type { MarkdownNode } from "@milkdown/kit/transformer";
 import { blockquoteSchema, paragraphSchema } from "@milkdown/kit/preset/commonmark";
 import { $remark } from "@milkdown/kit/utils";
+import { defaultHandlers, type Handle } from "mdast-util-to-markdown";
+
+// Encode after remark's escaping, so the generated entities are not themselves
+// escaped. Keep the stock handlers for destinations, alt text and delimiters.
+function preserveTitleBreaks(handler: Handle): Handle {
+  const wrapped: Handle = (node, parent, state, info) => {
+    const safe = state.safe;
+    state.safe = (value, config) => {
+      const escaped = safe.call(state, value, config);
+      const construct = state.stack[state.stack.length - 1];
+      return construct === "titleQuote" || construct === "titleApostrophe"
+        ? escaped.replace(/\n/g, "&#10;").replace(/\r/g, "&#13;")
+        : escaped;
+    };
+    try {
+      return handler(node, parent, state, info);
+    } finally {
+      state.safe = safe;
+    }
+  };
+  // Preserve the handler's lookahead hook (used for adjacent inline nodes).
+  return Object.assign(wrapped, handler);
+}
 
 const ALERT_KINDS = new Set(["note", "tip", "important", "warning", "caution"]);
 
@@ -112,6 +136,15 @@ export const remarkConversion = $remark("epubzilla-conversion", () => function (
 });
 
 export function configureConversionSchemas(ctx: Ctx) {
+  ctx.update(remarkStringifyOptionsCtx, (options) => ({
+    ...options,
+    handlers: {
+      ...options.handlers,
+      link: preserveTitleBreaks(defaultHandlers.link),
+      image: preserveTitleBreaks(defaultHandlers.image),
+    },
+  }));
+
   ctx.update(blockquoteSchema.key, (previous) => (schemaCtx) => {
     const base = previous(schemaCtx);
     return {
