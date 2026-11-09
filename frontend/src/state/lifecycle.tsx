@@ -20,8 +20,11 @@
 //    previous book is released — newer changes re-run the guard;
 //  - Quit and the red close button are never dead: with nothing unsaved
 //    they go ahead even mid-operation; otherwise they wait for the
-//    operation and then run the guard. Quit requests are acknowledged at
-//    once so the shell can tell a live frontend from a hung one;
+//    operation and then run the guard. Quit requests are acknowledged
+//    while the app can visibly answer them (idle, or a decision — picker,
+//    sheet — on screen); a repeat that arrives while an operation or an
+//    exit's save is working stays unacknowledged until a decision shows,
+//    so the shell's native "Quit anyway?" fallback can fire if it hangs;
 //  - readable errors naming the file (lib/lifecycle.ts);
 //  - side effects on success: recents, native window title, menu state.
 //
@@ -159,6 +162,42 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
     setQueuedExitState(next);
   }, []);
   const operationRef = useRef<OperationKind | null>(null);
+  // An interactive decision (picker, unsaved sheet, save dialog) of the
+  // current operation is on screen, so a repeat Quit can be answered.
+  const decidingRef = useRef(false);
+  // Newest quit request left unacknowledged while the operation works.
+  const pendingAckRef = useRef<number | null>(null);
+
+  const ackQuit = useCallback((request: number | null) => {
+    if (request !== null) api.ackQuitRequest(request).catch(() => undefined);
+  }, []);
+  /** Acknowledge the held request (and, shell-side, every older one). */
+  const flushPendingAck = useCallback(() => {
+    const request = pendingAckRef.current;
+    pendingAckRef.current = null;
+    ackQuit(request);
+  }, [ackQuit]);
+  /** Hold `request` until the app can visibly answer it. */
+  const deferAck = useCallback((request: number | null) => {
+    if (request === null) return;
+    pendingAckRef.current = Math.max(pendingAckRef.current ?? 0, request);
+  }, []);
+  /**
+   * Await a user decision (picker, sheet). While it is on screen the app
+   * is visibly responsive, so held quit requests are acknowledged.
+   */
+  const awaitDecision = useCallback(
+    async <T,>(prompt: () => Promise<T>): Promise<T> => {
+      decidingRef.current = true;
+      flushPendingAck();
+      try {
+        return await prompt();
+      } finally {
+        decidingRef.current = false;
+      }
+    },
+    [flushPendingAck],
+  );
   const modalOpen = useSyncExternalStore(subscribeModals, anyModalOpen);
 
   /**
@@ -182,12 +221,16 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
       } finally {
         lockRef.current = false;
         operationRef.current = null;
+        decidingRef.current = false;
+        // Responsive again: whatever was held is answered by what follows
+        // (a queued quit's guard, or nothing because the quit happened).
+        flushPendingAck();
         readerRef.current.setFrozen(false);
         setBusy(false);
         setActivity(null);
       }
     },
-    [],
+    [flushPendingAck],
   );
 
   /**
@@ -234,8 +277,8 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
       if (!inPlace) {
         let picked: string | null;
         try {
-          picked = await pickSaveEpubPath(
-            `${slugifyTitle(book.metadata.title)}.epub`,
+          picked = await awaitDecision(() =>
+            pickSaveEpubPath(`${slugifyTitle(book.metadata.title)}.epub`),
           );
         } catch (err) {
           setNotice({
@@ -257,7 +300,7 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
       if (path !== undefined) addRecent(path);
       return { ok: true, revision };
     },
-    [addRecent],
+    [addRecent, awaitDecision],
   );
 
   /**
@@ -276,9 +319,12 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
         if (book === null) return true;
         if (!ask && !hasUnsaved()) return true;
         const before = revision();
-        const choice = await new Promise<GuardChoice>((resolve) => {
-          setGuard({ title: book.metadata.title, resolve });
-        });
+        const choice = await awaitDecision(
+          () =>
+            new Promise<GuardChoice>((resolve) => {
+              setGuard({ title: book.metadata.title, resolve });
+            }),
+        );
         setGuard(null);
         if (choice === "cancel") return false;
         if (choice === "dont-save") {
@@ -291,7 +337,7 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
         ask = true; // changed meanwhile: those changes are unsaved
       }
     },
-    [hasUnsaved, saveLocked],
+    [hasUnsaved, saveLocked, awaitDecision],
   );
 
   /**
@@ -339,7 +385,7 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
         let target = path ?? null;
         if (target === null) {
           try {
-            target = await pickEpubFile();
+            target = await awaitDecision(pickEpubFile);
           } catch (err) {
             setNotice({
               message: "The open dialog couldn’t be shown.",
@@ -352,7 +398,7 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
         await openLocked(target);
       });
     },
-    [exclusive, openLocked],
+    [exclusive, openLocked, awaitDecision],
   );
 
   const openPaths = useCallback(
@@ -424,32 +470,49 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
   );
 
   /**
-   * ⌘Q / Quit. Never dead: idle → guard, then quit; mid-operation with
-   * nothing unsaved → quit now; mid-operation with unsaved work → run
-   * once the operation finishes. A quit or window close already deciding
-   * absorbs repeats (its sheet is on screen).
+   * ⌘Q / Quit (`request`: the shell's request id to acknowledge; null when
+   * replayed from the queue). Never dead: idle → guard, then quit;
+   * mid-operation with nothing unsaved → quit now; mid-operation with
+   * unsaved work → queued, run once the operation finishes.
    *
-   * Returns false only when a quit is already queued behind an operation
-   * that has not finished: that request is left unacknowledged, so the
-   * shell offers its native "Quit anyway?" prompt instead of waiting on an
-   * operation that may never end.
+   * A repeat that the running exit or the queued quit already covers is
+   * acknowledged only while a decision (picker, sheet) is on screen. While
+   * the operation is working (IPC, settling, applying, saving) it is held
+   * unacknowledged until a decision appears or the operation ends — so a
+   * healthy app never looks hung behind its own sheet, and one stuck in a
+   * save gets the shell's native "Quit anyway?" after its timeout.
    */
-  const requestQuit = useCallback((): boolean => {
-    if (lockRef.current) {
-      if (operationRef.current === "exit") return true;
-      if (!hasUnsaved()) {
-        void api.quitApp().catch(() => undefined);
-        return true;
+  const requestQuit = useCallback(
+    (request: number | null = null): void => {
+      const answerRepeat = () => {
+        if (decidingRef.current) ackQuit(request);
+        else deferAck(request);
+      };
+      if (lockRef.current) {
+        if (operationRef.current === "exit") {
+          answerRepeat();
+          return;
+        }
+        if (!hasUnsaved()) {
+          ackQuit(request);
+          void api.quitApp().catch(() => undefined);
+          return;
+        }
+        if (queuedExitRef.current === "quit") {
+          answerRepeat();
+          return;
+        }
+        ackQuit(request);
+        setQueuedExit("quit");
+        return;
       }
-      if (queuedExitRef.current === "quit") return false;
-      setQueuedExit("quit");
-      return true;
-    }
-    void exclusive(async () => {
-      if (await passGuardLocked()) await api.quitApp().catch(() => undefined);
-    }, "exit");
-    return true;
-  }, [exclusive, hasUnsaved, passGuardLocked, setQueuedExit]);
+      ackQuit(request);
+      void exclusive(async () => {
+        if (await passGuardLocked()) await api.quitApp().catch(() => undefined);
+      }, "exit");
+    },
+    [exclusive, hasUnsaved, passGuardLocked, setQueuedExit, ackQuit, deferAck],
+  );
 
   /** Red close button with unsaved work: guard, then destroy the window. */
   const closeWindowGuarded = useCallback(() => {
@@ -537,16 +600,10 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
     const subscriptions = Promise.all([
       onOpenFiles((paths) => handlersRef.current.openPaths(paths)),
       onRecentBooksChanged(setRecents),
-      onQuitRequested((request) => {
-        // Acknowledge at once (the guard may take a while): the shell
-        // treats an unacknowledged request as a hung webview and asks
-        // natively — which is also what a repeat ⌘Q behind a stuck
-        // operation should get (see requestQuit).
-        const accepted = handlersRef.current.requestQuit();
-        if (accepted && request !== null) {
-          api.ackQuitRequest(request).catch(() => undefined);
-        }
-      }),
+      // requestQuit acknowledges (or deliberately holds) the request: the
+      // shell treats an unacknowledged one as a hung webview and asks
+      // natively.
+      onQuitRequested((request) => handlersRef.current.requestQuit(request)),
     ]);
     void subscriptions.then(() => {
       if (disposed) return;

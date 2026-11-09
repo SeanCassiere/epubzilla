@@ -1207,10 +1207,11 @@ describe("exit requests during a lifecycle operation", () => {
     expect(count(backend, "ack_quit_request")).toBe(1);
     expect(count(backend, "quit_app")).toBe(0);
     expect(sheet()).toBeNull();
-    // A repeat while that quit still waits is left unacknowledged, so the
-    // shell offers its native "Quit anyway?" if the operation is stuck.
+    // The picker is a decision on screen: the app is visibly responsive,
+    // so a repeat is acknowledged (no "isn't responding") and stacks
+    // nothing.
     await act(() => emit("app-quit-requested", 2));
-    expect(count(backend, "ack_quit_request")).toBe(1);
+    expect(count(backend, "ack_quit_request")).toBe(2);
 
     await act(async () => picker.resolve(null)); // open cancelled
     const guard = await findSheet();
@@ -1234,6 +1235,108 @@ describe("exit requests during a lifecycle operation", () => {
     // Not re-run from a queue after Cancel.
     expect(sheet()).toBeNull();
     expect(count(backend, "quit_app")).toBe(0);
+  });
+
+  const acks = (backend: Backend) =>
+    backend.calls
+      .filter((c) => c.cmd === "ack_quit_request")
+      .map((c) => c.args.request);
+
+  it("a repeat ⌘Q while an open is working stays unacknowledged until it ends", async () => {
+    const backend = mockBackend();
+    await mount(backend);
+    await openFromWelcome(backend, ALPHA);
+    await makeDirty("core-dirty");
+    const gate = deferred<void>();
+    backend.openGate = gate.promise;
+    await act(() => emit("open-files", [BETA]));
+    fireEvent.click(within(await findSheet()).getByRole("button", { name: "Don’t Save" }));
+    await waitFor(() => expect(opened(backend, BETA)).toBe(true));
+
+    await act(() => emit("app-quit-requested", 1)); // queued: taken on
+    await act(() => emit("app-quit-requested", 2)); // repeat: no decision shown
+    expect(acks(backend)).toEqual([1]);
+    expect(count(backend, "quit_app")).toBe(0);
+
+    // The open finishes: responsive again, and the queued quit runs (the
+    // replacement is clean, so it quits without asking).
+    await act(async () => gate.resolve());
+    await waitFor(() => expect(count(backend, "quit_app")).toBe(1));
+    expect(acks(backend)).toEqual([1, 2]);
+  });
+
+  it("a repeat ⌘Q while the exit’s Save is stalled stays unacknowledged (native fallback)", async () => {
+    const backend = mockBackend();
+    await mount(backend);
+    await openFromWelcome(backend, ALPHA);
+    await makeDirty("core-dirty");
+    const gate = deferred<void>();
+    backend.saveGate = gate.promise;
+    await act(() => emit("app-quit-requested", 101));
+    fireEvent.click(within(await findSheet()).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(count(backend, "save_book")).toBe(1));
+    expect(sheet()).toBeNull();
+
+    // Nothing on screen to answer them: the shell's 2 s timer must fire.
+    await act(() => emit("app-quit-requested", 102));
+    await act(() => emit("app-quit-requested", 103));
+    expect(acks(backend)).toEqual([101]);
+    expect(count(backend, "quit_app")).toBe(0);
+
+    await act(async () => gate.resolve());
+    await waitFor(() => expect(count(backend, "quit_app")).toBe(1));
+  });
+
+  it("a held repeat is acknowledged as soon as the exit shows its sheet again", async () => {
+    const backend = mockBackend();
+    await mount(backend);
+    await openFromWelcome(backend, ALPHA);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const buffer = (await screen.findByLabelText(
+      "chapter buffer",
+    )) as HTMLTextAreaElement;
+    await waitFor(() => expect(buffer.value).not.toBe(""));
+    fireEvent.change(buffer, { target: { value: "first" } });
+    const gate = deferred<void>();
+    backend.saveGate = gate.promise;
+    await act(() => emit("app-quit-requested", 1));
+    fireEvent.click(within(await findSheet()).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(count(backend, "save_book")).toBe(1));
+    await act(() => emit("app-quit-requested", 2));
+    expect(acks(backend)).toEqual([1]);
+
+    // A newer edit slipped in, so the guard asks again: that sheet answers.
+    fireEvent.change(buffer, { target: { value: "second" } });
+    await act(async () => gate.resolve());
+    const again = await findSheet();
+    expect(acks(backend)).toEqual([1, 2]);
+    fireEvent.click(within(again).getByRole("button", { name: "Cancel" }));
+    await idle();
+    expect(count(backend, "quit_app")).toBe(0);
+  });
+
+  it("repeat ⌘Q behind another operation’s sheet is acknowledged (never “isn’t responding”)", async () => {
+    const backend = mockBackend();
+    await mount(backend);
+    await openFromWelcome(backend, ALPHA);
+    await makeDirty("core-dirty");
+    await act(() => emit("app-menu", "close-book"));
+    const closeGuard = await findSheet();
+
+    await act(() => emit("app-quit-requested", 1)); // queued behind the sheet
+    await act(() => emit("app-quit-requested", 2)); // repeat: sheet on screen
+    expect(acks(backend)).toEqual([1, 2]);
+    expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+
+    // Cancelling Close Book runs the queued quit, which asks again (Save
+    // is still offered on quit).
+    fireEvent.click(within(closeGuard).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(closeGuard.isConnected).toBe(false));
+    const quitGuard = await findSheet();
+    fireEvent.click(within(quitGuard).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(count(backend, "quit_app")).toBe(1));
+    expect(count(backend, "save_book")).toBe(1);
+    expect(count(backend, "close_book")).toBe(0);
   });
 
   it("red close: clean closes mid-operation; dirty waits, then guards", async () => {

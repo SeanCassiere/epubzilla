@@ -35,7 +35,7 @@ directory (`recent-books.json`). A missing or corrupt file starts empty.
 | Event | Payload | When |
 |---|---|---|
 | `open-files` | `string[]` | macOS `RunEvent::Opened` (Finder double-click, Open With, drop on the Dock icon) once the frontend is ready, and File ▸ Open Recent items. The frontend opens the first `.epub`. |
-| `app-quit-requested` | `u64` request id | ⌘Q or the Quit item, while a frontend is listening and has not confirmed. The exit is held (`prevent_exit`) until `quit_app`. The frontend acknowledges with `ack_quit_request(id)` immediately. |
+| `app-quit-requested` | `u64` request id | ⌘Q or the Quit item, while a frontend is listening and has not confirmed. The exit is held (`prevent_exit`) until `quit_app`. The frontend acknowledges with `ack_quit_request(id)` while it can visibly answer (see below). |
 | `recent-books-changed` | `string[]` | After any recents change. |
 | `app-menu` | `string` | Other menu items, as before (ids are frontend shortcut actions, now including `close-book`). |
 
@@ -65,10 +65,18 @@ crashed webview.
 The frontend never drops a quit request either: while a lifecycle
 operation (picker, guard, save, open, create) is pending it quits at once
 when nothing is unsaved, and otherwise runs the guard as soon as the
-operation finishes. The red close button behaves the same way. A repeat ⌘Q
-while such a queued quit still waits is deliberately left unacknowledged,
-so an operation that never finishes ends in the native prompt rather than
-a dead ⌘Q.
+operation finishes. The red close button behaves the same way.
+
+Acknowledgement follows what is on screen. A request that starts a quit or
+queues one is acknowledged at once. A repeat that the running exit or the
+queued quit already covers is acknowledged only while an interactive
+decision is on screen (the unsaved sheet, the open or save picker), so a
+healthy app with a sheet up never gets the native prompt. While the
+operation is working instead — an open or create in flight, or an exit
+settling edits, applying the editor buffer or saving — the repeat is held
+unacknowledged until a decision appears or the operation ends. An
+operation that never finishes therefore ends in the native prompt after
+2 s rather than a dead ⌘Q.
 
 The predefined macOS Quit item sends `terminate:`, which bypasses this
 handshake, so it is replaced by a custom item with ⌘Q.
