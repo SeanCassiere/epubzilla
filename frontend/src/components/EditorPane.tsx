@@ -267,7 +267,7 @@ export function EditorPane() {
       <div className="editor-toolbar">
         {format === "Markdown" ? (
           <div
-            className="editor-mode-switch"
+            className="editor-mode-switch segmented"
             role="group"
             aria-label="Editing mode"
           >
@@ -359,18 +359,23 @@ export function EditorPane() {
             <div className="modal-actions">
               <button
                 type="button"
+                data-variant="destructive"
+                onClick={() => resolveLeave(true)}
+              >
+                Discard changes
+              </button>
+              <button type="button" onClick={() => resolveLeave(false)}>
+                Keep editing
+              </button>
+              <button
+                type="button"
+                data-variant="primary"
                 disabled={applying}
                 onClick={() => {
                   void apply().then((ok) => resolveLeave(ok));
                 }}
               >
                 Apply &amp; continue
-              </button>
-              <button type="button" onClick={() => resolveLeave(true)}>
-                Discard changes
-              </button>
-              <button type="button" onClick={() => resolveLeave(false)}>
-                Keep editing
               </button>
             </div>
           </div>
