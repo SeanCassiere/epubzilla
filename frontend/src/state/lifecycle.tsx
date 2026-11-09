@@ -14,7 +14,8 @@
 //    queued) while it is held or any modal is open;
 //  - nothing changes behind a decision: while the lock is held the reader
 //    is frozen (editor read-only, mutations and chapter navigation
-//    refused), edits already in flight settle before the guard looks, and
+//    refused), edits already in flight settle — their resulting model
+//    visible to the guard before React re-renders — before it looks, and
 //    the document revision is re-checked after the guard and before the
 //    previous book is released — newer changes re-run the guard;
 //  - Quit and the red close button are never dead: with nothing unsaved
@@ -189,9 +190,14 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  /** Unsaved work right now: dirty book or unapplied editor buffer. */
+  /**
+   * Unsaved work right now: dirty book or unapplied editor buffer. Reads
+   * the reader's synchronous snapshot, so a mutation that settled a moment
+   * ago counts even before React re-rendered.
+   */
   const hasUnsaved = useCallback((): boolean => {
-    const { book, editorBufferModified } = readerRef.current;
+    const { latestBook, editorBufferModified } = readerRef.current;
+    const book = latestBook();
     return book !== null && needsUnsavedPrompt(book.dirty, editorBufferModified());
   }, []);
 
@@ -218,7 +224,7 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
   const saveLocked = useCallback(
     async (alwaysPrompt: boolean): Promise<SaveOutcome> => {
       const failed: SaveOutcome = { ok: false, revision: 0 };
-      const book = readerRef.current.book;
+      const book = readerRef.current.latestBook();
       if (book === null || book.epub_version !== "V3") return failed;
       if (!(await readerRef.current.applyEditorBuffer())) return failed;
       // What this save persists: anything newer than this is still unsaved.
@@ -265,7 +271,8 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
     async (force = false): Promise<boolean> => {
       let ask = force;
       for (;;) {
-        const { book, revision } = readerRef.current;
+        const { latestBook, revision } = readerRef.current;
+        const book = latestBook();
         if (book === null) return true;
         if (!ask && !hasUnsaved()) return true;
         const before = revision();
@@ -303,7 +310,7 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
   const openLocked = useCallback(
     async (path: string): Promise<void> => {
       // Reselecting the open file is not a Revert: no prompt, no reload.
-      if (samePath(readerRef.current.book?.source ?? null, path)) return;
+      if (samePath(readerRef.current.latestBook()?.source ?? null, path)) return;
       if (!(await passGuardLocked())) return;
       const revision = readerRef.current.revision();
       setActivity(`Opening “${fileName(path)}”…`);
@@ -402,7 +409,7 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
 
   const requestClose = useCallback(() => {
     if (lockRef.current || anyModalOpen()) return;
-    if (readerRef.current.book === null) return;
+    if (readerRef.current.latestBook() === null) return;
     void exclusive(async () => {
       if (!(await passGuardLocked())) return;
       await readerRef.current.closeBook();
@@ -496,7 +503,7 @@ export function LifecycleProvider({ children }: { children: ReactNode }) {
             if (!anyModalOpen()) void save(false);
             break;
           case "save-as":
-            if (!anyModalOpen() && readerRef.current.book !== null) {
+            if (!anyModalOpen() && readerRef.current.latestBook() !== null) {
               void save(true);
             }
             break;

@@ -86,8 +86,19 @@ interface ReaderState {
    */
   frozen: boolean;
   setFrozen: (frozen: boolean) => void;
-  /** Resolves once every mutation already in flight has settled. */
+  /**
+   * Resolves once every mutation already in flight has settled AND its
+   * resulting Book is visible through `latestBook` (React may not have
+   * committed it to `book` yet).
+   */
   settle: () => Promise<void>;
+  /**
+   * The authoritative open Book right now, synchronously: updated the
+   * moment a command returns a new model, before React re-renders. The
+   * lifecycle guard reads this, never the last rendered `book`, so a
+   * mutation that just completed is never mistaken for a clean book.
+   */
+  latestBook: () => Book | null;
   /**
    * Monotonic document revision: changes whenever a mutation starts or the
    * editor buffer changes. The controller compares it across a guard
@@ -237,7 +248,15 @@ export function findLinear(book: Book, from: number, step: 1 | -1): number {
 }
 
 export function ReaderProvider({ children }: { children: ReactNode }) {
-  const [book, setBook] = useState<Book | null>(null);
+  const [book, setBookState] = useState<Book | null>(null);
+  // Synchronous mirror of `book` (see ReaderState.latestBook): every model
+  // the core hands back lands here first, then in React state.
+  const bookRef = useRef<Book | null>(null);
+  const setBook = useCallback((next: Book | null) => {
+    bookRef.current = next;
+    setBookState(next);
+  }, []);
+  const latestBook = useCallback(() => bookRef.current, []);
   const [spineIndex, setSpineIndex] = useState(-1);
   const [chapter, setChapter] = useState<ChapterContent | null>(null);
   const [fragment, setFragment] = useState<string | null>(null);
@@ -438,7 +457,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       }
       return { ok: true, book: next };
     },
-    [book, loadChapter],
+    [book, loadChapter, setBook],
   );
 
   const openBook = useCallback(
@@ -469,17 +488,17 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
     if (previous !== null) {
       await api.closeBook(previous.id).catch(() => undefined);
     }
-  }, [book]);
+  }, [book, setBook]);
 
   const updateMetadata = useCallback(
     async (metadata: Metadata): Promise<boolean> => {
       if (book === null || frozenRef.current) return false;
       setError(null);
       try {
-        const updated = await track(api.updateMetadata(book.id, metadata));
         // Same book, same spine position — only the model (and dirty flag,
-        // displayed from M2.4) changed.
-        setBook(updated);
+        // displayed from M2.4) changed. Adopted inside the tracked work, so
+        // settle() returns only once the guard can see the new model.
+        await track(api.updateMetadata(book.id, metadata).then(setBook));
         setValidation(null);
         return true;
       } catch (err) {
@@ -487,7 +506,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
         return false;
       }
     },
-    [book, track],
+    [book, track, setBook],
   );
 
   /**
@@ -503,8 +522,13 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       const currentId = book.spine[spineIndex]?.id ?? null;
       setError(null);
       try {
-        const updated = await track(mutate());
-        setBook(updated);
+        // Adopted inside the tracked work (see updateMetadata).
+        const updated = await track(
+          mutate().then((next) => {
+            setBook(next);
+            return next;
+          }),
+        );
         setValidation(null);
         if (currentId !== null) {
           const kept = updated.spine.findIndex((s) => s.id === currentId);
@@ -516,7 +540,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
         return null;
       }
     },
-    [book, spineIndex, track],
+    [book, spineIndex, track, setBook],
   );
 
   const addChapter = useCallback(
@@ -602,7 +626,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
         return { ok: false, error: err };
       }
     },
-    [book, refreshValidation],
+    [book, refreshValidation, setBook],
   );
 
   const goTo = useCallback(
@@ -733,6 +757,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       frozen,
       setFrozen,
       settle,
+      latestBook,
       revision,
       insertEditorImages,
       closeBook,
@@ -778,6 +803,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       frozen,
       setFrozen,
       settle,
+      latestBook,
       revision,
       insertEditorImages,
       closeBook,
