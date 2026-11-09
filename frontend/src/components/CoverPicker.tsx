@@ -62,7 +62,11 @@ export function CoverPicker() {
             </select>
           )}
           {cover !== null && (
-            <button type="button" onClick={() => void setCover(null)}>
+            <button
+              type="button"
+              data-variant="destructive"
+              onClick={() => void setCover(null)}
+            >
               Remove cover
             </button>
           )}

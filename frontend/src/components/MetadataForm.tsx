@@ -104,6 +104,7 @@ export function MetadataForm({
             />
             <button
               type="button"
+              data-icon
               aria-label={`Remove author ${index + 1}`}
               onClick={() => removeAuthor(index)}
             >
@@ -167,7 +168,9 @@ export function MetadataForm({
         <button type="button" onClick={onCancel}>
           Cancel
         </button>
-        <button type="submit">{submitLabel}</button>
+        <button type="submit" data-variant="primary">
+          {submitLabel}
+        </button>
       </div>
     </form>
   );
