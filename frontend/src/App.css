@@ -40,8 +40,8 @@
   --accent-fill-hover: color-mix(in srgb, var(--accent-fill) 90%, black);
   --accent-fill-active: color-mix(in srgb, var(--accent-fill) 82%, black);
   --on-accent: #ffffff;
-  --color-danger: #c62828;
-  --color-warning: #b45309;
+  --color-danger: #a51d1d;
+  --color-warning: #9a4508;
   --color-success: #1a7f37;
   --color-info: var(--accent-text);
   --tint-strength: 10%;
@@ -1345,9 +1345,34 @@ li[aria-current="true"] > .toc-row,
   outline: none;
 }
 
-.code-editor:focus-within,
+/* The rich editor's host scrolls and paints nothing over its own edge, so
+   an inset shadow works there. CodeMirror's opaque surface and gutters
+   would cover one, so the raw editor gets an overlay instead (its host
+   doesn't scroll; .cm-scroller does). */
 .milkdown-host:focus-within {
   box-shadow: inset 0 var(--focus-ring-w) 0 var(--focus-ring);
+}
+
+.code-editor {
+  position: relative;
+}
+
+.code-editor:focus-within::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: var(--focus-ring-w);
+  background: var(--focus-ring);
+  pointer-events: none;
+  z-index: 10;
+}
+
+@media (forced-colors: active) {
+  .code-editor:focus-within,
+  .milkdown-host:focus-within {
+    outline: var(--focus-ring-w) solid Highlight;
+    outline-offset: calc(-1 * var(--focus-ring-w));
+  }
 }
 
 /* WYSIWYG mode (M3.2). */

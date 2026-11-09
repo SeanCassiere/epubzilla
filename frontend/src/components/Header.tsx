@@ -345,6 +345,7 @@ export function Header() {
             <button
               type="button"
               data-variant="primary"
+              data-autofocus
               onClick={() => {
                 // Save all: apply the editor buffer (if any), then save the
                 // book (incl. save-as when source is null), then proceed.
