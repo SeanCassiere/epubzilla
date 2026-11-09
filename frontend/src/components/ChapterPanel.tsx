@@ -83,6 +83,9 @@ export function ChapterPanel() {
                     <button
                       type="button"
                       className="chapter-action"
+                      data-variant="plain"
+                      data-size="sm"
+                      data-icon
                       aria-label={`Move up: ${label}`}
                       disabled={i === 0}
                       onClick={() => void moveSpineItem(item.id, -1)}
@@ -92,6 +95,9 @@ export function ChapterPanel() {
                     <button
                       type="button"
                       className="chapter-action"
+                      data-variant="plain"
+                      data-size="sm"
+                      data-icon
                       aria-label={`Move down: ${label}`}
                       disabled={i === book.spine.length - 1}
                       onClick={() => void moveSpineItem(item.id, 1)}
@@ -101,6 +107,9 @@ export function ChapterPanel() {
                     <button
                       type="button"
                       className="chapter-action"
+                      data-variant="plain"
+                      data-size="sm"
+                      data-icon
                       aria-label={`Remove: ${label}`}
                       onClick={() => setConfirming(item.id)}
                     >
@@ -114,6 +123,8 @@ export function ChapterPanel() {
                   <span>Remove “{label}”?</span>
                   <button
                     type="button"
+                    data-variant="destructive"
+                    data-size="sm"
                     onClick={() => {
                       setConfirming(null);
                       void removeChapter(item.id);
@@ -121,7 +132,11 @@ export function ChapterPanel() {
                   >
                     Confirm removal
                   </button>
-                  <button type="button" onClick={() => setConfirming(null)}>
+                  <button
+                    type="button"
+                    data-size="sm"
+                    onClick={() => setConfirming(null)}
+                  >
                     Cancel
                   </button>
                 </div>
@@ -139,7 +154,9 @@ export function ChapterPanel() {
               onChange={(e) => setNewTitle(e.target.value)}
               autoFocus
             />
-            <button type="submit">Add</button>
+            <button type="submit" data-variant="primary">
+              Add
+            </button>
             <button
               type="button"
               onClick={() => {

@@ -83,7 +83,7 @@ export function Sidebar() {
       type="button"
       role="tab"
       aria-selected={tab === id}
-      className={"sidebar-tab" + (tab === id ? " sidebar-tab-active" : "")}
+      className="sidebar-tab"
       onClick={() => selectTab(id)}
     >
       {label}
@@ -110,7 +110,11 @@ export function Sidebar() {
           alt={`Cover of ${book.metadata.title}`}
         />
       )}
-      <div className="sidebar-tabs" role="tablist" aria-label="Sidebar panels">
+      <div
+        className="sidebar-tabs segmented"
+        role="tablist"
+        aria-label="Sidebar panels"
+      >
         {tabButton("contents", "Contents")}
         {tabButton("chapters", "Chapters")}
         {tabButton("checks", "Checks")}

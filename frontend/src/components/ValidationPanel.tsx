@@ -29,6 +29,7 @@ export function ValidationPanel() {
         <button
           type="button"
           className="validation-run"
+          data-variant="primary"
           disabled={validating}
           onClick={() => void runValidation()}
         >
@@ -69,6 +70,7 @@ export function ValidationPanel() {
                         <button
                           type="button"
                           className="validation-location"
+                          data-variant="plain"
                           title={issue.location}
                           onClick={() => void goToResource(target, null)}
                         >

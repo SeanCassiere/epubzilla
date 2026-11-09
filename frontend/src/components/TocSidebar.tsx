@@ -199,6 +199,9 @@ function TocNode({
           <button
             type="button"
             className="toc-caret"
+            data-variant="plain"
+            data-size="sm"
+            data-icon
             aria-label={expanded ? "Collapse section" : "Expand section"}
             onClick={() => onToggle(key, !expanded)}
           >

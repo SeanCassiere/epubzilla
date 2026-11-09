@@ -386,6 +386,8 @@ export function MilkdownEditor({
           <button
             key={action.title}
             type="button"
+            data-variant="plain"
+            data-size="sm"
             title={action.title}
             aria-label={action.title}
             onMouseDown={(e) => e.preventDefault() /* keep the selection */}
@@ -415,6 +417,8 @@ export function MilkdownEditor({
         {onInsertImage !== undefined && (
           <button
             type="button"
+            data-variant="plain"
+            data-size="sm"
             title="Add an image to the book and reference it at the cursor"
             onMouseDown={(e) => e.preventDefault() /* keep the selection */}
             onClick={onInsertImage}

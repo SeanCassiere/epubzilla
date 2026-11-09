@@ -32,7 +32,8 @@ export function UpdateNotice() {
 
   return (
     <aside
-      className="update-notice"
+      className="update-notice banner"
+      data-tone="info"
       aria-label="Update available"
       aria-live="polite"
     >
@@ -46,6 +47,8 @@ export function UpdateNotice() {
       <button
         className="update-dismiss"
         type="button"
+        data-variant="plain"
+        data-icon
         aria-label="Dismiss update notice"
         onClick={() => setDismissed(true)}
       >
