@@ -1,9 +1,182 @@
+/* ==========================================================================
+   Design tokens (UI standard).
+
+   Light values live on :root; the ONE dark block below overrides them.
+   Component rules reference tokens only — no color literals, radii or
+   spacing values outside this section (reader-frame backdrops excepted).
+
+   Vibrancy rule (macOS, issue #61): every token that mixes with
+   `transparent` is vibrancy-safe and may be painted anywhere. Tokens that
+   resolve OPAQUE (--canvas, --surface-raised, --surface-sidebar) must never
+   be painted inside .sidebar when :root[data-platform="macos"], or the
+   native sidebar material behind the webview disappears.
+   ========================================================================== */
 :root {
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* --- Surfaces, text, lines ------------------------------------------ */
+  --canvas: Canvas; /* opaque */
+  --surface-raised: Canvas; /* opaque: dialogs, selected segment */
+  --surface-sunken: color-mix(in srgb, CanvasText 5%, transparent);
+  --surface-sidebar: color-mix(in srgb, CanvasText 4%, Canvas); /* opaque */
+  --fill-hover: color-mix(in srgb, CanvasText 6%, transparent);
+  --fill-active: color-mix(in srgb, CanvasText 11%, transparent);
+  --fill-selected: color-mix(in srgb, CanvasText 12%, transparent);
+  --fill-selected-strong: color-mix(in srgb, CanvasText 14%, transparent);
+  --fill-control: color-mix(in srgb, CanvasText 4%, transparent);
+  /* Editable field face: near-canvas but translucent (vibrancy-safe). */
+  --surface-field: color-mix(in srgb, Canvas 85%, transparent);
+  --text-primary: CanvasText;
+  --text-secondary: color-mix(in srgb, CanvasText 62%, transparent);
+  --text-tertiary: color-mix(in srgb, CanvasText 55%, transparent);
+  --text-disabled: color-mix(in srgb, CanvasText 35%, transparent);
+  --separator: color-mix(in srgb, CanvasText 12%, transparent);
+  --border: color-mix(in srgb, CanvasText 20%, transparent);
+  /* Known deviation (~2.1:1): the filled control face, not the border
+     alone, identifies controls (--fill-control / --surface-sunken). */
+  --border-control: color-mix(in srgb, CanvasText 30%, transparent);
+
+  /* --- Accent and semantics (static values are AA in both schemes) --- */
+  --accent-text: #0066cc;
+  --accent-fill: #0066cc;
+  --accent-fill-hover: color-mix(in srgb, var(--accent-fill) 90%, black);
+  --accent-fill-active: color-mix(in srgb, var(--accent-fill) 82%, black);
+  --on-accent: #ffffff;
+  --color-danger: #c62828;
+  --color-warning: #b45309;
+  --color-success: #1a7f37;
+  --color-info: var(--accent-text);
+  --tint-strength: 10%;
+  --tint-border-strength: 35%;
+  --tint-danger: color-mix(in srgb, var(--color-danger) var(--tint-strength), transparent);
+  --tint-warning: color-mix(in srgb, var(--color-warning) var(--tint-strength), transparent);
+  --tint-success: color-mix(in srgb, var(--color-success) var(--tint-strength), transparent);
+  --tint-info: color-mix(in srgb, var(--color-info) var(--tint-strength), transparent);
+  --tint-danger-border: color-mix(in srgb, var(--color-danger) var(--tint-border-strength), transparent);
+  --tint-warning-border: color-mix(in srgb, var(--color-warning) var(--tint-border-strength), transparent);
+  --tint-success-border: color-mix(in srgb, var(--color-success) var(--tint-border-strength), transparent);
+  --tint-info-border: color-mix(in srgb, var(--color-info) var(--tint-border-strength), transparent);
+  --scrim: rgba(0, 0, 0, 0.35);
+  --focus-ring: var(--accent-text);
+
+  /* Reader-frame backdrops: NOT theme tokens. They match the iframe's own
+     forced color-scheme (lib/chapter.ts), not the chrome, so they stay
+     literal and identical in both schemes. */
+  --reader-canvas-light: #ffffff;
+  --reader-canvas-dark: #1e1e1e;
+
+  /* --- Shadow -------------------------------------------------------- */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.12);
+  --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--separator);
+
+  /* --- Radii --------------------------------------------------------- */
+  --radius-xs: 3px; /* badges, severity pills */
+  --radius-sm: 5px; /* buttons, inputs, segments, rows, thumbnails */
+  --radius-md: 8px; /* cards, code blocks */
+  --radius-lg: 10px; /* dialogs (= windowEffects.radius) */
+
+  /* --- Spacing (4px grid) --------------------------------------------- */
+  --sp-2: 2px;
+  --sp-4: 4px;
+  --sp-6: 6px;
+  --sp-8: 8px;
+  --sp-12: 12px;
+  --sp-16: 16px;
+  --sp-20: 20px;
+  --sp-24: 24px;
+  --sp-32: 32px;
+  --inset-bar: var(--sp-4) var(--sp-16); /* + min-height --bar-h */
+  --inset-panel: var(--sp-8);
+  --inset-dialog: var(--sp-20);
+  --inset-row: 0 var(--sp-8);
+  --gap-tight: var(--sp-4);
+  --gap-control: var(--sp-8);
+  --gap-section: var(--sp-12);
+  --gap-block: var(--sp-16);
+
+  /* --- Typography (macOS HIG scale; root stays 16px so rem layout
+     metrics like the 17rem sidebar don't move) ------------------------ */
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 15px;
+  --text-xl: 17px;
+  --text-code: 14px;
+  --text-editor: 16px;
+  --leading-tight: 1.3;
+  --leading-base: 1.4;
+  --leading-prose: 1.6;
+
+  /* --- Controls and bars --------------------------------------------- */
+  --control-sm: 20px;
+  --control-md: 24px;
+  --control-lg: 28px;
+  --control-pad-sm: var(--sp-6);
+  --control-pad-md: 10px;
+  --control-pad-lg: var(--sp-12);
+  --target-min: 24px;
+  --bar-h: 36px;
+  --header-h: 44px;
+
+  /* --- Focus and motion ---------------------------------------------- */
+  --focus-ring-w: 2px;
+  --motion-fast: 100ms;
+  --motion-base: 160ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+
+  font-family: var(--font-ui);
   color-scheme: light dark;
   /* Explicit opaque default — the vibrancy layering below subtracts from
      this, so nothing may rely on the webview's implicit background. */
-  background: Canvas;
+  background: var(--canvas);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface-raised: color-mix(in srgb, CanvasText 6%, Canvas);
+    --fill-hover: color-mix(in srgb, CanvasText 8%, transparent);
+    --fill-active: color-mix(in srgb, CanvasText 14%, transparent);
+    --fill-control: color-mix(in srgb, CanvasText 9%, transparent);
+    --surface-field: color-mix(in srgb, CanvasText 6%, transparent);
+    --separator: color-mix(in srgb, CanvasText 14%, transparent);
+    --border-control: color-mix(in srgb, CanvasText 32%, transparent);
+    --accent-text: #409cff;
+    --accent-fill: #086cd1;
+    --accent-fill-hover: color-mix(in srgb, var(--accent-fill) 90%, white);
+    --accent-fill-active: color-mix(in srgb, var(--accent-fill) 82%, white);
+    --color-danger: #ff6961;
+    --color-warning: #ffb340;
+    --color-success: #30d158;
+    --tint-strength: 14%;
+    --tint-border-strength: 45%;
+    --scrim: rgba(0, 0, 0, 0.55);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+    --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.6),
+      0 0 0 1px color-mix(in srgb, CanvasText 18%, transparent);
+  }
+}
+
+/* The user's system accent where the engine exposes it (WKWebView), for
+   fills and the focus ring only; --accent-text stays static so link/info
+   text keeps AA. Engines without the keywords keep the static values. */
+@supports (color: AccentColor) and (color: AccentColorText) {
+  :root {
+    --accent-fill: AccentColor;
+    --on-accent: AccentColorText;
+    --focus-ring: AccentColor;
+  }
+}
+
+/* Increase Contrast: stronger lines and secondary text. */
+@media (prefers-contrast: more) {
+  :root {
+    --separator: var(--border-control);
+    --border: var(--border-control);
+    --border-control: color-mix(in srgb, CanvasText 60%, transparent);
+    --text-secondary: color-mix(in srgb, CanvasText 80%, transparent);
+    --text-tertiary: color-mix(in srgb, CanvasText 72%, transparent);
+  }
 }
 
 body {
@@ -23,15 +196,20 @@ body {
 }
 
 .app-content {
-  background: Canvas;
+  background: var(--canvas);
 }
 
-/* Solid fallback when the user opts out of transparency: the OS renders
-   the material near-opaque, but keep the webview side deterministic too. */
-@media (prefers-reduced-transparency: reduce) {
+/* Solid fallback when the user opts out of transparency (or asks for more
+   contrast): the OS renders the material near-opaque, but keep the
+   webview side deterministic too. */
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
   :root[data-platform="macos"],
   :root[data-platform="macos"] body {
-    background: Canvas;
+    background: var(--canvas);
+  }
+
+  :root[data-platform="macos"] .sidebar {
+    background: var(--surface-sidebar);
   }
 }
 
@@ -45,6 +223,9 @@ body {
 .app-shell {
   height: 100%;
   display: flex;
+  font-size: var(--text-base);
+  line-height: var(--leading-base);
+  color: var(--text-primary);
   /* Overlay-titlebar insets: zero on Windows/Linux (native titlebar);
      App.tsx sets data-platform="macos" where the traffic lights float
      over the top-left of the content. */
@@ -52,17 +233,15 @@ body {
   --traffic-lights-inset: 0px;
 }
 
+.app-shell *,
+.app-shell *::before,
+.app-shell *::after {
+  box-sizing: border-box;
+}
+
 :root[data-platform="macos"] .app-shell {
   --titlebar-inset: 52px;
   --traffic-lights-inset: 84px;
-}
-
-/* Traffic-light spacer at the top of the sidebar; also a drag handle
-   (data-tauri-drag-region in Sidebar.tsx). Collapses to zero height on
-   platforms with a native titlebar. */
-.titlebar-drag-zone {
-  flex: none;
-  height: var(--titlebar-inset);
 }
 
 .app-content {
@@ -72,6 +251,324 @@ body {
   flex-direction: column;
 }
 
+/* ==========================================================================
+   Buttons. Base element rule = secondary; variants via attributes:
+     data-variant="primary | secondary | plain | destructive"
+     data-size="sm | lg"   (md is the default)
+     data-icon             (icon-only: square, >= 24px wide target)
+   :where() keeps the base at zero specificity so layout classes
+   (.toc-link, .sidebar-resize-handle, ...) override it without a fight.
+   ========================================================================== */
+:where(.app-shell) :where(button) {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-4);
+  height: var(--control-md);
+  margin: 0;
+  padding: 0 var(--control-pad-md);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius-sm);
+  background: var(--fill-control);
+  color: var(--text-primary);
+  font: 400 var(--text-base) / 1 var(--font-ui);
+  white-space: nowrap;
+  cursor: default;
+  transition:
+    background-color var(--motion-fast) var(--ease),
+    border-color var(--motion-fast) var(--ease),
+    color var(--motion-fast) var(--ease);
+}
+
+:where(.app-shell) :where(button):hover:not(:disabled) {
+  background: var(--fill-hover);
+}
+
+:where(.app-shell) :where(button):active:not(:disabled) {
+  background: var(--fill-active);
+}
+
+:where(.app-shell) :where(button):disabled {
+  color: var(--text-disabled);
+  background: transparent;
+  border-color: var(--separator);
+}
+
+/* Sizes */
+.app-shell button[data-size="sm"] {
+  height: var(--control-sm);
+  padding: 0 var(--control-pad-sm);
+  font-size: var(--text-sm);
+}
+
+.app-shell button[data-size="lg"] {
+  height: var(--control-lg);
+  padding: 0 var(--control-pad-lg);
+}
+
+.app-shell button[data-icon] {
+  width: var(--control-md);
+  min-width: var(--target-min);
+  padding: 0;
+}
+
+.app-shell button[data-icon][data-size="sm"] {
+  width: var(--target-min);
+}
+
+.app-shell button[data-icon][data-size="lg"] {
+  width: var(--control-lg);
+}
+
+/* Primary */
+.app-shell button[data-variant="primary"] {
+  background: var(--accent-fill);
+  border-color: transparent;
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+.app-shell button[data-variant="primary"]:hover:not(:disabled) {
+  background: var(--accent-fill-hover);
+}
+
+.app-shell button[data-variant="primary"]:active:not(:disabled) {
+  background: var(--accent-fill-active);
+}
+
+.app-shell button[data-variant="primary"]:disabled {
+  opacity: 0.45;
+}
+
+/* Plain / ghost */
+.app-shell button[data-variant="plain"] {
+  background: transparent;
+  border-color: transparent;
+}
+
+.app-shell button[data-variant="plain"][data-icon] {
+  color: var(--text-secondary);
+}
+
+.app-shell button[data-variant="plain"]:hover:not(:disabled) {
+  background: var(--fill-hover);
+  color: var(--text-primary);
+}
+
+.app-shell button[data-variant="plain"]:active:not(:disabled) {
+  background: var(--fill-active);
+}
+
+.app-shell button[data-variant="plain"]:disabled {
+  color: var(--text-disabled);
+}
+
+/* Destructive */
+.app-shell button[data-variant="destructive"] {
+  background: var(--tint-danger);
+  border-color: var(--tint-danger-border);
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+.app-shell button[data-variant="destructive"]:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-danger) 16%, transparent);
+}
+
+.app-shell button[data-variant="destructive"]:active:not(:disabled) {
+  background: color-mix(in srgb, var(--color-danger) 22%, transparent);
+}
+
+.app-shell button[data-variant="destructive"]:disabled {
+  color: var(--text-disabled);
+  background: transparent;
+  border-color: var(--separator);
+}
+
+/* ==========================================================================
+   Universal focus ring. Nothing below removes an outline without an
+   equivalent >= 3:1 replacement.
+   ========================================================================== */
+.app-shell :where(button, [role="tab"], input, select, textarea, summary, a[href]):focus-visible,
+.sidebar-resize-handle:focus-visible {
+  outline: var(--focus-ring-w) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* ==========================================================================
+   Fields: input / select / textarea.
+   ========================================================================== */
+:where(.app-shell) :where(input:not([type="checkbox"], [type="radio"]), select, textarea) {
+  height: var(--control-md);
+  margin: 0;
+  padding: 0 var(--sp-8);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius-sm);
+  background: var(--surface-field);
+  color: var(--text-primary);
+  font: 400 var(--text-base) / var(--leading-base) var(--font-ui);
+  min-width: 0;
+  transition: border-color var(--motion-fast) var(--ease);
+}
+
+:where(.app-shell) :where(input:not([type="checkbox"], [type="radio"])) {
+  appearance: none;
+}
+
+/* Native popup on every platform: no custom dropdown. */
+:where(.app-shell) :where(select) {
+  appearance: auto;
+  padding: 0 var(--sp-4);
+}
+
+:where(.app-shell) :where(textarea) {
+  height: auto;
+  min-height: calc(3lh + 2 * var(--sp-4) + 2px);
+  padding: var(--sp-4) var(--sp-8);
+  resize: vertical;
+}
+
+.app-shell :is(input, textarea)::placeholder {
+  color: var(--text-tertiary);
+  opacity: 1;
+}
+
+.app-shell :is(input, select, textarea):focus-visible {
+  outline-offset: 0;
+}
+
+.app-shell :is(input, textarea)[readonly] {
+  background: var(--surface-sunken);
+  border-color: var(--separator);
+  color: var(--text-secondary);
+}
+
+.app-shell :is(input, select, textarea)[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+.app-shell :is(input, select, textarea)[aria-invalid="true"]:focus-visible {
+  outline-color: var(--color-danger);
+}
+
+/* ==========================================================================
+   Segmented control: editor mode switch and sidebar tabs.
+   ========================================================================== */
+.segmented {
+  display: inline-flex;
+  padding: var(--sp-2);
+  gap: var(--sp-2);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
+}
+
+.app-shell .segmented > button {
+  height: var(--control-sm);
+  padding: 0 var(--control-pad-md);
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 1px);
+  background: transparent;
+  color: var(--text-secondary);
+  transition:
+    background-color var(--motion-base) var(--ease),
+    color var(--motion-fast) var(--ease),
+    box-shadow var(--motion-base) var(--ease);
+}
+
+/* macOS segments don't tint on hover; the label darkens instead. */
+.app-shell .segmented > button:hover:not(:disabled),
+.app-shell .segmented > button:active:not(:disabled) {
+  background: transparent;
+  color: var(--text-primary);
+}
+
+.app-shell .segmented > button:is([aria-pressed="true"], [aria-selected="true"]) {
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
+/* Inside the vibrant sidebar the selected segment must stay translucent. */
+:root[data-platform="macos"]
+  .sidebar
+  .segmented
+  > button:is([aria-pressed="true"], [aria-selected="true"]) {
+  background: var(--fill-selected-strong);
+}
+
+.app-shell .segmented > button:focus-visible {
+  outline-offset: -2px;
+}
+
+/* ==========================================================================
+   Banners: .banner + data-tone="info | warning | danger | success".
+   .error (header / editor failures) is the danger banner.
+   ========================================================================== */
+.banner,
+.error {
+  --tone: var(--color-info);
+  --tone-tint: var(--tint-info);
+  --tone-border: var(--tint-info-border);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-8) var(--sp-12);
+  min-width: 0;
+  min-height: var(--bar-h);
+  margin: 0;
+  padding: var(--inset-bar);
+  background: var(--tone-tint);
+  border-bottom: 1px solid var(--tone-border);
+  color: var(--text-primary);
+  font-size: var(--text-base);
+  overflow-wrap: anywhere;
+}
+
+.banner[data-tone="warning"] {
+  --tone: var(--color-warning);
+  --tone-tint: var(--tint-warning);
+  --tone-border: var(--tint-warning-border);
+}
+
+.banner[data-tone="success"] {
+  --tone: var(--color-success);
+  --tone-tint: var(--tint-success);
+  --tone-border: var(--tint-success-border);
+}
+
+.banner[data-tone="danger"],
+.error {
+  --tone: var(--color-danger);
+  --tone-tint: var(--tint-danger);
+  --tone-border: var(--tint-danger-border);
+}
+
+/* A banner's message takes the free space and wraps; actions keep size. */
+.banner > :is(span, p) {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.banner > button {
+  flex: none;
+}
+
+/* Inline (in-flow) danger banner: header and editor load errors. */
+.error {
+  min-height: 0;
+  padding: var(--sp-6) var(--sp-12);
+  border: 1px solid var(--tone-border);
+  /* The message is plain text; a left rule in the semantic color carries
+     the tone without relying on red body text. */
+  border-left: 3px solid var(--tone);
+  border-radius: var(--radius-sm);
+}
+
+/* ==========================================================================
+   Header
+   ========================================================================== */
 /* No sidebar (no book open): the header is the window's top-left content,
    so it must clear the floating traffic lights itself. */
 :root[data-platform="macos"]
@@ -85,28 +582,38 @@ body {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.5rem 1rem;
-  border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  gap: var(--sp-8) var(--gap-control);
+  min-height: var(--header-h);
+  padding: var(--sp-8) var(--sp-16);
+  border-bottom: 1px solid var(--separator);
 }
 
 .app-header-main {
   display: flex;
   align-items: baseline;
-  gap: 0.75rem;
+  gap: var(--sp-12);
   min-width: 0;
   flex: 1;
 }
 
+.app-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-control);
+  margin-left: auto;
+}
+
 .app-title {
-  font-size: 1.1rem;
+  font-size: var(--text-xl);
+  font-weight: 600;
+  line-height: var(--leading-tight);
   margin: 0;
 }
 
 .book-identity {
   display: flex;
   align-items: baseline;
-  gap: 0.5rem;
+  gap: var(--sp-8);
   min-width: 0;
 }
 
@@ -119,67 +626,39 @@ body {
 
 /* Unsaved-changes marker beside the title (M2.4). */
 .dirty-indicator {
-  color: #d97706;
-  font-size: 0.75rem;
+  color: var(--color-warning);
+  font-size: var(--text-sm);
   line-height: 1;
 }
 
-/* Unsaved-changes guard modal buttons (M2.4). */
-.modal-actions {
-  display: flex;
-  gap: 0.5rem;
-  justify-content: flex-end;
-  margin-top: 1rem;
-}
-
 .book-authors {
-  opacity: 0.7;
+  color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .status {
-  opacity: 0.7;
-  font-size: 0.9rem;
+  color: var(--text-secondary);
+  font-size: var(--text-base);
 }
 
-.error {
+.app-header > .error {
   flex-basis: 100%;
-  margin: 0;
-  color: #c0392b;
-  font-size: 0.9rem;
 }
 
-.update-notice {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.45rem 1rem;
-  border-bottom: 1px solid color-mix(in srgb, #2563eb 35%, transparent);
-  background: color-mix(in srgb, #2563eb 10%, Canvas);
-  font-size: 0.85rem;
+.editor-pane > .error {
+  margin: var(--sp-12) var(--sp-16) var(--sp-8);
 }
 
-.update-notice span {
-  flex: 1;
+.editor-pane > .error + button {
+  align-self: flex-start;
+  margin: 0 var(--sp-16);
 }
 
-.update-notice button {
-  flex: none;
-  white-space: nowrap;
-}
-
-.update-dismiss {
-  border: 0;
-  background: none;
-  color: inherit;
-  cursor: pointer;
-  font-size: 1.15rem;
-  line-height: 1;
-  padding: 0.15rem 0.3rem;
-}
-
+/* ==========================================================================
+   Sidebar
+   ========================================================================== */
 /* Tabbed sidebar column (M2.3): tab strip above the active panel.
    Full-height left column since issue #61. */
 .sidebar {
@@ -188,13 +667,28 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-right: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+  border-right: 1px solid var(--separator);
+  font-size: var(--text-base);
+}
+
+/* Windows/Linux: no material, so give the column its own surface. */
+:root:not([data-platform="macos"]) .sidebar {
+  background: var(--surface-sidebar);
+}
+
+/* Traffic-light spacer at the top of the sidebar; also a drag handle
+   (data-tauri-drag-region in Sidebar.tsx). Collapses to zero height on
+   platforms with a native titlebar. */
+.titlebar-drag-zone {
+  flex: none;
+  height: var(--titlebar-inset);
 }
 
 /* Sidebar/content divider (issue #61, Stage 3): a 9px hit area straddling
    the sidebar's hairline border (negative margins keep the visual layout
-   unchanged). Never inside a data-tauri-drag-region, and well inboard of
-   the window edge so the OS resize zone can't steal the gesture. */
+   unchanged — drag-handle geometry, not spacing). Never inside a
+   data-tauri-drag-region, and well inboard of the window edge so the OS
+   resize zone can't steal the gesture. */
 .sidebar-resize-handle {
   flex: none;
   width: 9px;
@@ -206,8 +700,7 @@ body {
 }
 
 .sidebar-resize-handle:focus-visible {
-  outline: none;
-  background: color-mix(in srgb, currentColor 25%, transparent);
+  outline-offset: -2px;
 }
 
 /* During a drag: keep the resize cursor everywhere, stop text selection,
@@ -233,127 +726,42 @@ body.sidebar-resizing .chapter-frame {
 
 .sidebar-panel-focus > .toc-sidebar {
   flex: 1;
-  border-right: 0;
+}
+
+/* Current cover above the sidebar tabs (issue #73). */
+.sidebar-cover {
+  display: block;
+  width: 100%;
+  max-height: 12rem;
+  object-fit: contain;
+  padding: var(--sp-8) var(--inset-panel) 0;
 }
 
 .sidebar-tabs {
   display: flex;
-  gap: 0.25rem;
-  padding: 0.5rem 0.5rem 0;
-  border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+  margin: var(--sp-8) var(--inset-panel) 0;
 }
 
-.sidebar-tab {
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  font-size: 0.85rem;
-  cursor: pointer;
-  padding: 0.3rem 0.6rem;
-  border-radius: 4px 4px 0 0;
-  opacity: 0.7;
-}
-
-.sidebar-tab-active {
-  opacity: 1;
-  font-weight: 600;
-  background: color-mix(in srgb, currentColor 10%, transparent);
-}
-
-/* Chapter management panel (M2.3). */
-.chapter-badge {
-  flex: none;
-  align-self: center;
-  font-size: 0.65rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  opacity: 0.6;
-  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
-  border-radius: 3px;
-  padding: 0 0.25rem;
-}
-
-.chapter-actions {
-  flex: none;
-  align-self: center;
-  display: inline-flex;
-  gap: 0.1rem;
-}
-
-.chapter-action {
-  border: 0;
-  background: none;
-  color: inherit;
-  cursor: pointer;
-  font-size: 0.75rem;
-  padding: 0.15rem 0.25rem;
-  border-radius: 3px;
-  opacity: 0.7;
-}
-
-.chapter-action:hover:not(:disabled) {
-  background: color-mix(in srgb, currentColor 10%, transparent);
-  opacity: 1;
-}
-
-.chapter-action:disabled {
-  opacity: 0.25;
-  cursor: default;
-}
-
-.chapter-confirm {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  flex-wrap: wrap;
-  font-size: 0.8rem;
-  padding: 0.25rem 0.35rem 0.4rem;
-}
-
-.chapter-confirm button {
-  font-size: 0.75rem;
-  padding: 0.15rem 0.4rem;
-}
-
-.chapter-add,
-.chapter-add-open {
-  margin: 0.5rem 0.35rem 0;
-}
-
-.chapter-add {
-  display: flex;
-  gap: 0.3rem;
-  align-items: center;
-}
-
-.chapter-add input {
+.app-shell .sidebar-tabs > button {
   flex: 1;
   min-width: 0;
-  font: inherit;
-  font-size: 0.85rem;
-  padding: 0.2rem 0.3rem;
-}
-
-.chapter-add button,
-.chapter-add-open {
-  font-size: 0.8rem;
+  padding: 0 var(--sp-6);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .toc-sidebar {
   min-height: 0;
   overflow-y: auto;
-  padding: 0.75rem 0.5rem 1.5rem;
-  border-right: 1px solid color-mix(in srgb, currentColor 15%, transparent);
-  font-size: 0.9rem;
+  padding: var(--sp-12) var(--sp-4) var(--sp-24);
 }
 
 .toc-heading {
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  opacity: 0.6;
-  margin: 0 0 0.5rem 0.5rem;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: var(--leading-tight);
+  color: var(--text-secondary);
+  margin: 0 var(--sp-12) var(--sp-4);
 }
 
 .toc-list {
@@ -363,60 +771,243 @@ body.sidebar-resizing .chapter-frame {
 }
 
 .toc-list .toc-list {
-  padding-left: 0.9rem;
+  padding-left: var(--sp-16);
 }
 
+/* Source-list rows: >= 24px, whole-row hover, aria-current selection. */
 .toc-row {
   display: flex;
-  align-items: baseline;
-  gap: 0.15rem;
-  border-radius: 4px;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--control-md);
+  margin: 0 var(--sp-4);
+  padding: var(--inset-row);
+  border-radius: var(--radius-sm);
+  transition: background-color var(--motion-fast) var(--ease);
 }
 
+.toc-row:hover {
+  background: var(--fill-hover);
+}
+
+li[aria-current="true"] > .toc-row,
 .toc-row.toc-current {
-  background: color-mix(in srgb, currentColor 12%, transparent);
+  background: var(--fill-selected);
   font-weight: 600;
+}
+
+/* Emphasized selection while the list has keyboard focus, as in a focused
+   AppKit source list; everything in the row inherits the on-accent color. */
+.toc-list:focus-within li[aria-current="true"] > .toc-row {
+  background: var(--accent-fill);
+  color: var(--on-accent);
+}
+
+.app-shell .toc-list:focus-within li[aria-current="true"] > .toc-row button {
+  color: inherit;
+}
+
+.app-shell .toc-list:focus-within li[aria-current="true"] > .toc-row button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--on-accent) 20%, transparent);
+}
+
+.app-shell .toc-list:focus-within li[aria-current="true"] > .toc-row button:disabled {
+  color: color-mix(in srgb, var(--on-accent) 50%, transparent);
+}
+
+.toc-list:focus-within li[aria-current="true"] > .toc-row .chapter-badge {
+  color: inherit;
+  border-color: color-mix(in srgb, var(--on-accent) 50%, transparent);
+}
+
+.app-shell .toc-row :focus-visible {
+  outline-offset: -2px;
+}
+
+.app-shell .toc-list:focus-within li[aria-current="true"] > .toc-row :focus-visible {
+  outline-color: var(--on-accent);
+}
+
+/* The row is the visual target; the link only does layout. */
+.app-shell .toc-link {
+  flex: 1;
+  align-self: stretch;
+  justify-content: flex-start;
+  min-width: 0;
+  height: auto;
+  min-height: var(--control-md);
+  padding: var(--sp-2) 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  line-height: var(--leading-tight);
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.app-shell .toc-link:hover:not(:disabled),
+.app-shell .toc-link:active:not(:disabled) {
+  background: none;
+}
+
+.app-shell .toc-section {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.app-shell .toc-list:focus-within li[aria-current="true"] > .toc-row .toc-section {
+  color: inherit;
 }
 
 .toc-caret {
   flex: none;
-  border: 0;
-  background: none;
-  cursor: pointer;
-  padding: 0.15rem 0.2rem;
-  font-size: 0.75rem;
-  opacity: 0.7;
-  color: inherit;
 }
 
-.toc-link {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  background: none;
-  cursor: pointer;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  padding: 0.25rem 0.35rem;
-  border-radius: 4px;
+/* Chapter management panel (M2.3). */
+.chapter-badge {
+  flex: none;
+  font-size: var(--text-xs);
+  line-height: var(--leading-tight);
+  font-weight: 400;
+  color: var(--text-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  padding: 0 var(--sp-4);
+}
+
+.chapter-actions {
+  flex: none;
+  display: inline-flex;
+  gap: var(--sp-2);
+}
+
+.chapter-confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-6);
+  margin: var(--sp-2) var(--sp-4) var(--sp-4);
+  padding: var(--sp-4) var(--sp-8);
+  background: var(--tint-warning);
+  border: 1px solid var(--tint-warning-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
   overflow-wrap: anywhere;
 }
 
-.toc-link:hover {
-  background: color-mix(in srgb, currentColor 8%, transparent);
+.chapter-confirm > span {
+  flex: 1 1 100%;
 }
 
-.toc-section {
-  cursor: default;
-  opacity: 0.8;
-  font-style: italic;
+.chapter-add,
+.chapter-add-open {
+  margin: var(--sp-8) var(--sp-4) 0;
 }
 
-.toc-section:hover {
+.chapter-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-tight);
+  align-items: center;
+}
+
+.chapter-add input {
+  flex: 1 1 8rem;
+}
+
+/* Validation panel (issue #72): the sidebar's "Checks" tab. */
+.validation-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+}
+
+.validation-controls {
+  padding: 0 var(--sp-4);
+}
+
+.validation-hint,
+.validation-summary {
+  margin: 0 var(--sp-12);
+  color: var(--text-secondary);
+}
+
+.validation-summary {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.validation-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--sp-4) var(--sp-12);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  overflow-y: auto;
+}
+
+.validation-issue {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-8) var(--sp-12);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.validation-severity {
+  --tone: var(--color-warning);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: var(--leading-tight);
+  border-radius: var(--radius-xs);
+  padding: 0 var(--sp-4);
+  color: var(--tone);
+  background: color-mix(in srgb, var(--tone) var(--tint-strength), transparent);
+  border: 1px solid color-mix(in srgb, var(--tone) var(--tint-border-strength), transparent);
+}
+
+.validation-severity-error {
+  --tone: var(--color-danger);
+}
+
+.validation-severity-warning {
+  --tone: var(--color-warning);
+}
+
+.validation-message {
+  overflow-wrap: anywhere;
+}
+
+/* Location: a link-styled plain button. */
+.app-shell .validation-location {
+  height: auto;
+  min-height: var(--control-sm);
+  padding: 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  text-decoration: underline;
+}
+
+.app-shell .validation-location:hover:not(:disabled),
+.app-shell .validation-location:active:not(:disabled) {
   background: none;
+  color: var(--text-primary);
 }
 
+.validation-location-plain {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+/* ==========================================================================
+   Reader
+   ========================================================================== */
 .reader-pane {
   flex: 1;
   display: flex;
@@ -426,43 +1017,54 @@ body.sidebar-resizing .chapter-frame {
 
 .chapter-nav {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: center;
-  gap: 1rem;
-  padding: 0.4rem 1rem;
-  border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+  gap: var(--sp-8) var(--sp-12);
+  min-height: var(--bar-h);
+  padding: var(--inset-bar);
+  border-bottom: 1px solid var(--separator);
 }
 
 .chapter-position {
   font-variant-numeric: tabular-nums;
-  opacity: 0.7;
-  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.reader-pane > .status {
+  margin: 0;
+  padding: var(--sp-8) var(--sp-16);
 }
 
 .chapter-frame {
   flex: 1;
   width: 100%;
   border: 0;
-  background: white;
+  background: var(--reader-canvas-light);
 }
 
 /* Dark reading theme (issue #78): backdrop matching the dark chapter
    document so switches don't flash white behind the loading frame. */
 .chapter-frame-dark {
-  background: #1e1e1e;
+  background: var(--reader-canvas-dark);
 }
 
 .empty {
-  opacity: 0.65;
-  padding: 2rem;
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  margin: 0;
+  padding: var(--sp-32);
   text-align: center;
 }
 
-/* Metadata dialogs (M2.2): centered modal over a dimmed backdrop. */
+/* ==========================================================================
+   Dialogs
+   ========================================================================== */
+/* Metadata and unsaved-changes dialogs: centered over a dimmed backdrop. */
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--scrim);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -470,112 +1072,144 @@ body.sidebar-resizing .chapter-frame {
 }
 
 .modal {
-  background: Canvas;
-  color: CanvasText;
-  border-radius: 8px;
-  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
-  padding: 1rem 1.25rem 1.25rem;
+  box-sizing: border-box;
   width: min(26rem, calc(100vw - 2rem));
-  max-height: calc(100vh - 4rem);
+  max-height: calc(100vh - 2rem);
   overflow-y: auto;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+  padding: var(--inset-dialog);
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--text-base);
+  overflow-wrap: anywhere;
 }
 
 .modal-title {
-  margin: 0 0 0.75rem;
-  font-size: 1rem;
+  margin: 0 0 var(--sp-12);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: var(--leading-tight);
+}
+
+.modal > p {
+  margin: 0;
+  font-size: var(--text-md);
+}
+
+/* Action row: [destructive …] [Cancel] [Primary]. DOM order = visual. */
+.modal-actions,
+.metadata-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--gap-control);
+  margin-top: var(--sp-16);
+}
+
+.app-shell :is(.modal-actions, .metadata-form-actions) > button {
+  height: var(--control-lg);
+  padding: 0 var(--control-pad-lg);
+}
+
+.app-shell :is(.modal-actions, .metadata-form-actions) > button[data-variant="destructive"] {
+  margin-right: auto;
+}
+
+.app-shell .modal :is(input:not([type="checkbox"], [type="radio"]), select) {
+  height: var(--control-lg);
 }
 
 .metadata-form {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: var(--gap-section);
 }
 
 .metadata-field {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-}
-
-.metadata-field input,
-.metadata-field textarea {
-  font: inherit;
-  padding: 0.3rem 0.45rem;
-}
-
-.metadata-field input[readonly] {
-  opacity: 0.7;
+  gap: var(--sp-4);
 }
 
 .metadata-label {
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
   font-weight: 600;
-  opacity: 0.8;
+  color: var(--text-secondary);
 }
 
 .metadata-generated {
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   font-style: italic;
-  opacity: 0.6;
+  color: var(--text-secondary);
 }
 
 .metadata-field-error {
-  color: #c0392b;
-  font-size: 0.8rem;
+  color: var(--color-danger);
+  font-size: var(--text-sm);
 }
 
 .metadata-authors {
-  border: 1px solid color-mix(in srgb, currentColor 15%, transparent);
-  border-radius: 6px;
-  padding: 0.5rem 0.75rem 0.75rem;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--sp-8) var(--sp-12) var(--sp-12);
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: var(--sp-8);
   align-items: flex-start;
+}
+
+.metadata-authors > legend {
+  padding: 0 var(--sp-4);
 }
 
 .metadata-author-row {
   display: flex;
-  gap: 0.35rem;
+  gap: var(--sp-6);
   width: 100%;
 }
 
 .metadata-author-row input {
   flex: 1;
-  font: inherit;
-  padding: 0.3rem 0.45rem;
 }
 
-.metadata-extras summary {
-  cursor: pointer;
-  font-size: 0.85rem;
-  opacity: 0.8;
-}
-
-.metadata-extras[open] summary {
-  margin-bottom: 0.5rem;
+.app-shell .metadata-author-row > button[data-icon] {
+  width: var(--control-lg);
+  height: var(--control-lg);
 }
 
 .metadata-extras {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: var(--sp-8);
+}
+
+.metadata-extras summary {
+  cursor: default;
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+  border-radius: var(--radius-xs);
+}
+
+.metadata-extras[open] summary {
+  margin-bottom: var(--sp-8);
 }
 
 /* Cover picker (issue #73): cover section of the edit-metadata dialog. */
 .cover-picker {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  margin-bottom: 0.75rem;
-  padding-bottom: 0.75rem;
-  border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-12);
+  padding-bottom: var(--sp-12);
+  border-bottom: 1px solid var(--separator);
 }
 
 .cover-picker-body {
   display: flex;
-  gap: 0.75rem;
+  gap: var(--sp-12);
   align-items: flex-start;
 }
 
@@ -583,8 +1217,8 @@ body.sidebar-resizing .chapter-frame {
   width: 5.5rem;
   height: 7.5rem;
   object-fit: cover;
-  border-radius: 4px;
-  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
   flex: none;
 }
 
@@ -592,48 +1226,32 @@ body.sidebar-resizing .chapter-frame {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.75rem;
-  opacity: 0.6;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  background: var(--surface-sunken);
 }
 
 .cover-picker-actions {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: var(--sp-6);
   align-items: flex-start;
   min-width: 0;
 }
 
 .cover-picker-actions select {
-  font: inherit;
-  font-size: 0.85rem;
-  max-width: 14rem;
+  max-width: 100%;
 }
 
 .cover-picker-note {
   margin: 0;
-  font-size: 0.75rem;
-  opacity: 0.6;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
 }
 
-/* Current cover above the sidebar tabs (issue #73). */
-.sidebar-cover {
-  display: block;
-  width: 100%;
-  max-height: 12rem;
-  object-fit: contain;
-  padding: 0.5rem 0.5rem 0;
-  box-sizing: border-box;
-}
-
-.metadata-form-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
-  margin-top: 0.25rem;
-}
-
-/* Edit mode (M3.1). */
+/* ==========================================================================
+   Editor (M3)
+   ========================================================================== */
 .editor-pane {
   flex: 1;
   min-height: 0;
@@ -641,65 +1259,98 @@ body.sidebar-resizing .chapter-frame {
   flex-direction: column;
 }
 
+.editor-pane > .status {
+  margin: 0;
+  padding: var(--sp-8) var(--sp-16);
+}
+
 .editor-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.6rem;
-  padding: 0.35rem 1rem;
-  border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent);
-  font-size: 0.85rem;
+  gap: var(--sp-6) var(--sp-8);
+  min-height: var(--bar-h);
+  padding: var(--inset-bar);
+  border-bottom: 1px solid var(--separator);
 }
 
 .editor-mode {
   font-weight: 600;
-  opacity: 0.75;
+  color: var(--text-secondary);
 }
 
 .editor-notice {
-  opacity: 0.7;
+  flex: 1 1 14rem;
+  min-width: 0;
+  color: var(--text-secondary);
 }
 
 .editor-toolbar-spacer {
   flex: 1;
 }
 
+/* Raw (CodeMirror) editor host: chrome colors from tokens; the syntax
+   palette is CodeMirror's own. The .app-shell prefix outranks the theme
+   rules CodeMirror injects at runtime. */
 .code-editor {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  font-size: 0.95rem;
+  font-size: var(--text-code);
 }
 
 .code-editor .cm-editor {
   height: 100%;
 }
 
+.app-shell .code-editor .cm-editor {
+  background: var(--canvas);
+  color: var(--text-primary);
+}
+
+.app-shell .code-editor .cm-editor .cm-scroller {
+  font-family: var(--font-mono);
+  line-height: var(--leading-base);
+}
+
+.app-shell .code-editor .cm-editor .cm-gutters {
+  background: var(--surface-sunken);
+  color: var(--text-tertiary);
+  border-right: 1px solid var(--separator);
+}
+
+.app-shell .code-editor .cm-editor .cm-activeLineGutter {
+  background: var(--fill-hover);
+  color: var(--text-secondary);
+}
+
+.app-shell .code-editor .cm-editor .cm-activeLine {
+  background: var(--fill-hover);
+}
+
+.app-shell .code-editor .cm-editor .cm-cursor {
+  border-left-color: var(--text-primary);
+}
+
+.app-shell .code-editor .cm-editor .cm-selectionLayer .cm-selectionBackground,
+.app-shell .code-editor .cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground {
+  background: color-mix(in srgb, var(--accent-text) 28%, transparent);
+}
+
+/* The editors replace their own outline with a 2px accent rule along the
+   top edge of the editing surface (a full ring would always be on while
+   typing, since text surfaces always match :focus-visible). */
+.app-shell .code-editor .cm-editor.cm-focused,
+.milkdown-host .ProseMirror {
+  outline: none;
+}
+
+.code-editor:focus-within,
+.milkdown-host:focus-within {
+  box-shadow: inset 0 var(--focus-ring-w) 0 var(--focus-ring);
+}
+
 /* WYSIWYG mode (M3.2). */
-.editor-mode-switch {
-  display: inline-flex;
-  gap: 0;
-  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.editor-mode-switch button {
-  border: none;
-  border-radius: 0;
-  padding: 0.2rem 0.6rem;
-  font-size: 0.8rem;
-  background: transparent;
-}
-
-.editor-mode-switch button + button {
-  border-left: 1px solid color-mix(in srgb, currentColor 25%, transparent);
-}
-
-.editor-mode-switch button[aria-pressed="true"] {
-  background: color-mix(in srgb, currentColor 12%, transparent);
-  font-weight: 600;
-}
-
 .milkdown-editor {
   flex: 1;
   min-height: 0;
@@ -709,46 +1360,62 @@ body.sidebar-resizing .chapter-frame {
 
 .milkdown-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.3rem 1rem;
-  border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+  gap: var(--sp-2);
+  min-height: var(--bar-h);
+  padding: var(--inset-bar);
+  border-bottom: 1px solid var(--separator);
 }
 
-.milkdown-toolbar button {
-  padding: 0.2rem 0.5rem;
-  font-size: 0.8rem;
-  min-width: 2rem;
+.app-shell .milkdown-toolbar button {
+  min-width: var(--control-lg);
 }
 
 .milkdown-host {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  background: var(--canvas);
+  color: var(--text-primary);
 }
 
 .milkdown-host .milkdown {
   height: 100%;
 }
 
+/* Editor prose stays reader-sized, not chrome-sized. */
 .milkdown-host .ProseMirror {
   min-height: 100%;
-  padding: 1rem 1.25rem;
-  outline: none;
-  line-height: 1.6;
+  padding: var(--sp-16) var(--sp-20);
+  font-size: var(--text-editor);
+  line-height: var(--leading-prose);
+  caret-color: var(--text-primary);
+}
+
+.milkdown-host .ProseMirror a {
+  color: var(--accent-text);
 }
 
 .milkdown-host .ProseMirror blockquote {
-  border-left: 3px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-left: 3px solid var(--border-control);
   margin-left: 0;
-  padding-left: 0.9rem;
-  opacity: 0.9;
+  padding-left: var(--sp-16);
+  color: var(--text-secondary);
+}
+
+.milkdown-host .ProseMirror :not(pre) > code {
+  font-family: var(--font-mono);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-xs);
+  padding: 0 var(--sp-2);
 }
 
 .milkdown-host .ProseMirror pre {
-  background: color-mix(in srgb, currentColor 8%, transparent);
-  padding: 0.6rem 0.8rem;
-  border-radius: 6px;
+  font-family: var(--font-mono);
+  background: var(--surface-sunken);
+  padding: var(--sp-12) var(--sp-16);
+  border-radius: var(--radius-md);
   overflow-x: auto;
 }
 
@@ -758,115 +1425,60 @@ body.sidebar-resizing .chapter-frame {
 
 .milkdown-host .ProseMirror th,
 .milkdown-host .ProseMirror td {
-  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
-  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--border);
+  padding: var(--sp-4) var(--sp-12);
 }
 
-/* Validation panel (issue #72): the sidebar's "Checks" tab. */
-.validation-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
+/* ==========================================================================
+   Motion and accessibility media
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  .app-shell *,
+  .app-shell *::before,
+  .app-shell *::after {
+    transition-duration: 0ms !important;
+  }
 }
 
-.validation-controls {
-  padding: 0 0.75rem;
-}
+/* Windows forced colors: system color pairs for controls, selection and
+   focus; shadows dropped. forced-color-adjust stays auto everywhere except
+   the selection fills, which must keep Highlight/HighlightText. */
+@media (forced-colors: active) {
+  .app-shell button,
+  .app-shell :is(input, select, textarea) {
+    border: 1px solid ButtonText;
+  }
 
-.validation-run {
-  font: inherit;
-  font-size: 0.85rem;
-  padding: 0.3rem 0.7rem;
-  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
-  border-radius: 4px;
-  background: none;
-  color: inherit;
-  cursor: pointer;
-}
+  .app-shell button:disabled {
+    color: GrayText;
+    border-color: GrayText;
+  }
 
-.validation-run:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
+  .app-shell :where(button, [role="tab"], input, select, textarea, summary, a[href]):focus-visible,
+  .sidebar-resize-handle:focus-visible {
+    outline-color: Highlight;
+  }
 
-.validation-hint,
-.validation-summary {
-  margin: 0;
-  padding: 0 0.75rem;
-  font-size: 0.85rem;
-  opacity: 0.8;
-}
+  li[aria-current="true"] > .toc-row,
+  .toc-row.toc-current,
+  .app-shell .segmented > button:is([aria-pressed="true"], [aria-selected="true"]) {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+  }
 
-.validation-summary {
-  font-weight: 600;
-  opacity: 1;
-}
+  li[aria-current="true"] > .toc-row button {
+    color: HighlightText;
+  }
 
-.validation-list {
-  list-style: none;
-  margin: 0;
-  padding: 0 0.75rem 0.75rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  overflow-y: auto;
-}
+  .modal,
+  .segmented > button {
+    box-shadow: none;
+  }
 
-.validation-issue {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.15rem;
-  padding: 0.4rem 0.5rem;
-  border: 1px solid color-mix(in srgb, currentColor 15%, transparent);
-  border-radius: 6px;
-  font-size: 0.85rem;
-}
-
-.validation-severity {
-  font-size: 0.65rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  border-radius: 3px;
-  padding: 0 0.3rem;
-}
-
-.validation-severity-error {
-  color: #c62828;
-  border: 1px solid color-mix(in srgb, #c62828 60%, transparent);
-  background: color-mix(in srgb, #c62828 10%, transparent);
-}
-
-.validation-severity-warning {
-  color: #b26a00;
-  border: 1px solid color-mix(in srgb, #b26a00 60%, transparent);
-  background: color-mix(in srgb, #b26a00 10%, transparent);
-}
-
-.validation-message {
-  overflow-wrap: anywhere;
-}
-
-.validation-location {
-  font: inherit;
-  font-size: 0.8rem;
-  border: 0;
-  background: none;
-  color: inherit;
-  cursor: pointer;
-  padding: 0;
-  text-decoration: underline;
-  opacity: 0.8;
-}
-
-.validation-location:hover {
-  opacity: 1;
-}
-
-.validation-location-plain {
-  font-size: 0.8rem;
-  opacity: 0.6;
+  .modal {
+    border: 1px solid CanvasText;
+  }
 }
 
 /* Conversion extensions use the editor's existing system colour palette. */
