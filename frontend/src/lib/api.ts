@@ -202,3 +202,50 @@ export function validateBook(bookId: string): Promise<ValidationIssue[]> {
 export function resourceUrl(bookId: string, path: string): string {
   return convertFileSrc(`${bookId}/${path}`, "epub");
 }
+
+// ---- Shell commands (book lifecycle; crates/app/src/lifecycle.rs) ----
+
+/** Recent books, newest first (max 10). Shared with File ▸ Open Recent. */
+export function listRecentBooks(): Promise<string[]> {
+  return invoke<string[]>("list_recent_books");
+}
+
+/** Record a successful open / first save / save as; returns the new list. */
+export function addRecentBook(path: string): Promise<string[]> {
+  return invoke<string[]>("add_recent_book", { path });
+}
+
+/** Forget one recent entry (e.g. the file is gone); returns the new list. */
+export function removeRecentBook(path: string): Promise<string[]> {
+  return invoke<string[]>("remove_recent_book", { path });
+}
+
+/** Clear the recent-books history; the books themselves are untouched. */
+export function clearRecentBooks(): Promise<string[]> {
+  return invoke<string[]>("clear_recent_books");
+}
+
+/**
+ * Called once on mount: tells the shell the frontend is listening and
+ * returns files the OS asked us to open before it was (Finder cold start).
+ */
+export function takePendingOpenPaths(): Promise<string[]> {
+  return invoke<string[]>("take_pending_open_paths");
+}
+
+/** Quit for real — only after the unsaved-changes guard passed. */
+export function quitApp(): Promise<void> {
+  return invoke<void>("quit_app");
+}
+
+/** Native menu enablement for the current document state. */
+export interface MenuState {
+  hasBook: boolean;
+  editable: boolean;
+  busy: boolean;
+}
+
+/** Push the document state to the native menu (enable/disable items). */
+export function setMenuState(state: MenuState): Promise<void> {
+  return invoke<void>("set_menu_state", { state });
+}

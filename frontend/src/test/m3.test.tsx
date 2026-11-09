@@ -83,6 +83,7 @@ const CH3_MD = fixture.markdown.ch3.content;
 function mockBackend(): InvokeCall[] {
   const calls: InvokeCall[] = [];
   let book: Book = { ...fixture.book, source: "/books/fixture.epub" };
+  let openPicks = 0;
 
   mockConvertFileSrc("linux");
   mockIPC((cmd, payload) => {
@@ -90,7 +91,10 @@ function mockBackend(): InvokeCall[] {
     calls.push({ cmd, args });
     switch (cmd) {
       case "plugin:dialog|open":
-        return "/books/fixture.epub";
+        // First pick opens the fixture; later picks choose a different
+        // file (re-opening the open path is a deliberate no-op).
+        openPicks += 1;
+        return openPicks === 1 ? "/books/fixture.epub" : "/books/other.epub";
       case "open_book":
         return book;
       case "read_chapter": {
@@ -247,7 +251,7 @@ describe("M3 acceptance: unified unsaved-changes guard", () => {
     const pending = `${CH3_MD}\nPending edit.`;
     fireEvent.change(buffer(), { target: { value: pending } });
     fireEvent.click(screen.getByRole("button", { name: /open book/i }));
-    await screen.findByRole("dialog", { name: "Unsaved changes" });
+    await screen.findByRole("alertdialog", { name: /Do you want to save the changes/ });
     return pending;
   }
 
@@ -255,8 +259,8 @@ describe("M3 acceptance: unified unsaved-changes guard", () => {
     const calls = mockBackend();
     const pending = await editCh3WithPendingBuffer(calls);
 
-    const guard = screen.getByRole("dialog", { name: "Unsaved changes" });
-    fireEvent.click(within(guard).getByRole("button", { name: "Save all" }));
+    const guard = screen.getByRole("alertdialog", { name: /Do you want to save the changes/ });
+    fireEvent.click(within(guard).getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(calls.filter((c) => c.cmd === "open_book")).toHaveLength(2),
     );
@@ -281,8 +285,8 @@ describe("M3 acceptance: unified unsaved-changes guard", () => {
     const calls = mockBackend();
     await editCh3WithPendingBuffer(calls);
 
-    const guard = screen.getByRole("dialog", { name: "Unsaved changes" });
-    fireEvent.click(within(guard).getByRole("button", { name: "Discard" }));
+    const guard = screen.getByRole("alertdialog", { name: /Do you want to save the changes/ });
+    fireEvent.click(within(guard).getByRole("button", { name: "Don’t Save" }));
     await waitFor(() =>
       expect(calls.filter((c) => c.cmd === "open_book")).toHaveLength(2),
     );
@@ -297,7 +301,7 @@ describe("M3 acceptance: unified unsaved-changes guard", () => {
     const calls = mockBackend();
     const pending = await editCh3WithPendingBuffer(calls);
 
-    const guard = screen.getByRole("dialog", { name: "Unsaved changes" });
+    const guard = screen.getByRole("alertdialog", { name: /Do you want to save the changes/ });
     fireEvent.click(within(guard).getByRole("button", { name: "Cancel" }));
 
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -397,8 +401,8 @@ describe("M3 acceptance: full lifecycle (create → edit → apply → save)", (
     render(<App />);
 
     // Create through the wizard.
-    fireEvent.click(screen.getByRole("button", { name: "New book…" }));
-    const wizard = screen.getByRole("dialog", { name: "New book" });
+    fireEvent.click(screen.getByRole("button", { name: "New Book…" }));
+    const wizard = screen.getByRole("dialog", { name: "New Book" });
     fireEvent.change(within(wizard).getByLabelText("Title"), {
       target: { value: "Livro Novo — 新しい本" },
     });

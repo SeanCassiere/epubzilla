@@ -135,15 +135,15 @@ function mockBackend(fixtures: Fixture[] = []): InvokeCall[] {
   return calls;
 }
 
-/** Clicks "Open book…" and waits for the book title to appear. */
+/** Clicks "Open Book…" and waits for the book title to appear. */
 async function openViaDialog(title: string): Promise<void> {
-  fireEvent.click(screen.getByRole("button", { name: "Open book…" }));
+  fireEvent.click(screen.getByRole("button", { name: "Open Book…" }));
   await screen.findByText(title);
 }
 
 function openNewBookDialog(): void {
-  fireEvent.click(screen.getByRole("button", { name: "New book…" }));
-  screen.getByRole("dialog", { name: "New book" });
+  fireEvent.click(screen.getByRole("button", { name: "New Book…" }));
+  screen.getByRole("dialog", { name: "New Book" });
 }
 
 function setTitleInput(value: string): void {
@@ -217,7 +217,7 @@ describe("new-book wizard", () => {
     screen.getByText("Title is required.");
     expect(calls.some((c) => c.cmd === "create_book")).toBe(false);
     // Dialog stays open for correction.
-    screen.getByRole("dialog", { name: "New book" });
+    screen.getByRole("dialog", { name: "New Book" });
   });
 
   it("adds and removes author rows; blanks are dropped on submit", async () => {

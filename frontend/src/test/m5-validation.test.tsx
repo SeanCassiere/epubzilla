@@ -125,7 +125,7 @@ const validateCalls = (calls: InvokeCall[]) =>
 
 async function openViaDialog(fixture: Fixture): Promise<void> {
   openPicks.push(fixturePath(fixture));
-  fireEvent.click(screen.getByRole("button", { name: "Open book…" }));
+  fireEvent.click(screen.getByRole("button", { name: "Open Book…" }));
   await screen.findByText(fixture.book.metadata.title);
 }
 

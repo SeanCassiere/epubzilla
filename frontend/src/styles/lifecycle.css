@@ -1,0 +1,216 @@
+/* Book lifecycle surfaces: welcome panel, recents, unsaved-changes sheet,
+   error banner, drop overlay, activity status. Structural only — layout,
+   spacing, and system colors. Visual styling of buttons and surfaces
+   (data-variant="primary|secondary|destructive|plain") belongs to the
+   design-token layer. */
+
+/* ---- welcome ---------------------------------------------------------- */
+
+.welcome {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  padding: 3rem 1.5rem 2rem;
+  overflow-y: auto;
+}
+
+.welcome-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+.welcome-hint {
+  margin: 0;
+  font-size: 0.9rem;
+  color: GrayText;
+}
+
+.welcome-recents {
+  width: min(28rem, 100%);
+  margin-top: 1.5rem;
+}
+
+.welcome-recents-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: GrayText;
+}
+
+.welcome-recents-empty {
+  margin: 0;
+  font-size: 0.9rem;
+  color: GrayText;
+}
+
+.welcome-recents-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.welcome-recent {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.4rem 0.6rem;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.welcome-recent:hover:not(:disabled),
+.welcome-recent:focus-visible {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.welcome-recent-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.welcome-recent-folder {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.85rem;
+  color: GrayText;
+}
+
+/* ---- document identity -------------------------------------------------- */
+
+.book-not-saved,
+.book-read-only {
+  font-size: 0.8rem;
+  color: GrayText;
+  white-space: nowrap;
+}
+
+.lifecycle-status {
+  font-size: 0.9rem;
+  color: GrayText;
+}
+
+/* ---- unsaved-changes sheet --------------------------------------------- */
+
+.sheet .sheet-body {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.sheet-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+}
+
+/* Don't Save sits apart from Cancel/Save (HIG). */
+.sheet-actions-spacer {
+  flex: 1;
+}
+
+/* ---- New Book dialog ---------------------------------------------------- */
+
+.metadata-form-note {
+  margin: 0;
+  font-size: 0.8rem;
+  color: GrayText;
+}
+
+.form-error {
+  color: #c0392b;
+  font-size: 0.85rem;
+}
+
+.form-error p {
+  margin: 0;
+}
+
+.form-error-details {
+  opacity: 0.8;
+  font-size: 0.8rem;
+}
+
+/* ---- error banner ------------------------------------------------------- */
+
+.error-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid color-mix(in srgb, #c0392b 35%, transparent);
+  background: color-mix(in srgb, #c0392b 8%, Canvas);
+  font-size: 0.9rem;
+}
+
+.error-banner-message {
+  flex: 1;
+  min-width: 12rem;
+  margin: 0;
+}
+
+.error-banner-details {
+  order: 3;
+  flex-basis: 100%;
+  font-size: 0.8rem;
+}
+
+.error-banner-details summary {
+  cursor: pointer;
+  color: GrayText;
+}
+
+.error-banner-details p {
+  margin: 0.25rem 0 0;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.error-banner-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* ---- drop overlay ------------------------------------------------------- */
+
+.drop-overlay {
+  position: fixed;
+  inset: 0.5rem;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed Highlight;
+  border-radius: 10px;
+  background: color-mix(in srgb, Highlight 12%, transparent);
+  pointer-events: none;
+}
+
+.drop-overlay-label {
+  margin: 0;
+  padding: 0.6rem 1rem;
+  border-radius: 8px;
+  background: Canvas;
+  color: CanvasText;
+  font-weight: 600;
+}

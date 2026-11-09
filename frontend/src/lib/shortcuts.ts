@@ -22,6 +22,7 @@
 export type ShortcutAction =
   | "new-book"
   | "open-book"
+  | "close-book"
   | "save"
   | "save-as"
   | "toggle-edit"
@@ -50,6 +51,7 @@ export interface KeyCombo {
  *
  * Table (Mod = Cmd/Ctrl):
  *   Mod+N              new book        Mod+O              open book
+ *   Mod+W              close book
  *   Mod+S              save            Mod+Shift+S        save as
  *   Mod+E              toggle editor
  *   Mod+Alt+ArrowLeft  prev chapter    Mod+Alt+ArrowRight next chapter
@@ -77,6 +79,8 @@ export function matchShortcut(combo: KeyCombo): ShortcutAction | null {
       return "new-book";
     case "o":
       return "open-book";
+    case "w":
+      return "close-book";
     case "s":
       return "save";
     case "e":
@@ -97,6 +101,7 @@ export function menuActionFor(id: string): ShortcutAction | null {
   const actions: ReadonlyArray<ShortcutAction> = [
     "new-book",
     "open-book",
+    "close-book",
     "save",
     "save-as",
     "toggle-edit",

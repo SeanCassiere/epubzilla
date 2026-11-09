@@ -171,23 +171,23 @@ const saveBookCalls = (calls: InvokeCall[]) =>
 const createBookCalls = (calls: InvokeCall[]) =>
   calls.filter((c) => c.cmd === "create_book");
 
-/** Clicks "Open book…" and waits for the book title to appear. */
+/** Clicks "Open Book…" and waits for the book title to appear. */
 async function openViaDialog(fixture: Fixture, title: string): Promise<void> {
   openPicks.push(fixturePath(fixture));
-  fireEvent.click(screen.getByRole("button", { name: "Open book…" }));
+  fireEvent.click(screen.getByRole("button", { name: "Open Book…" }));
   await screen.findByText(title);
 }
 
 /** Creates a new (dirty, sourceless) book through the wizard. */
 async function createViaWizard(title: string): Promise<void> {
-  fireEvent.click(screen.getByRole("button", { name: "New book…" }));
-  const dialog = await screen.findByRole("dialog", { name: "New book" });
+  fireEvent.click(screen.getByRole("button", { name: "New Book…" }));
+  const dialog = await screen.findByRole("dialog", { name: "New Book" });
   fireEvent.change(within(dialog).getByLabelText("Title"), {
     target: { value: title },
   });
   fireEvent.click(within(dialog).getByRole("button", { name: "Create book" }));
   await waitFor(() =>
-    expect(screen.queryByRole("dialog", { name: "New book" })).toBeNull(),
+    expect(screen.queryByRole("dialog", { name: "New Book" })).toBeNull(),
   );
   await screen.findByText(title);
 }
@@ -332,44 +332,65 @@ describe("save-as", () => {
   });
 });
 
-describe("dirty guard on 'New book…'", () => {
-  it("Cancel aborts the transition: no wizard, no create_book", async () => {
+describe("dirty guard on 'New Book…' (prepare first, then guard)", () => {
+  /** Opens the New Book form, fills a title, presses Create. */
+  async function submitNewBook(title: string): Promise<HTMLElement> {
+    fireEvent.click(screen.getByRole("button", { name: "New Book…" }));
+    const wizard = await screen.findByRole("dialog", { name: "New Book" });
+    fireEvent.change(within(wizard).getByLabelText("Title"), {
+      target: { value: title },
+    });
+    fireEvent.click(within(wizard).getByRole("button", { name: "Create book" }));
+    return wizard;
+  }
+
+  it("cancelling the form itself never prompts and creates nothing", async () => {
     const calls = mockBackend();
     render(<App />);
     await createViaWizard("First book");
-    expect(createBookCalls(calls)).toHaveLength(1);
 
-    fireEvent.click(screen.getByRole("button", { name: "New book…" }));
-    const guard = await screen.findByRole("dialog", {
-      name: "Unsaved changes",
-    });
-    fireEvent.click(within(guard).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "New Book…" }));
+    const wizard = await screen.findByRole("dialog", { name: "New Book" });
+    fireEvent.click(within(wizard).getByRole("button", { name: "Cancel" }));
 
     expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(createBookCalls(calls)).toHaveLength(1);
     expect(saveBookCalls(calls)).toHaveLength(0);
   });
 
-  it("Discard proceeds without saving and closes the replaced book", async () => {
+  it("guard Cancel returns to the form with its input kept; nothing is created", async () => {
     const calls = mockBackend();
     render(<App />);
     await createViaWizard("First book");
 
-    fireEvent.click(screen.getByRole("button", { name: "New book…" }));
-    const guard = await screen.findByRole("dialog", {
-      name: "Unsaved changes",
+    const wizard = await submitNewBook("Second book");
+    const guard = await screen.findByRole("alertdialog", {
+      name: "Do you want to save the changes made to “First book”?",
     });
-    fireEvent.click(within(guard).getByRole("button", { name: "Discard" }));
+    fireEvent.click(within(guard).getByRole("button", { name: "Cancel" }));
 
-    // Guard gone, wizard open: complete the creation.
-    const wizard = await screen.findByRole("dialog", { name: "New book" });
-    fireEvent.change(within(wizard).getByLabelText("Title"), {
-      target: { value: "Second book" },
-    });
-    fireEvent.click(
-      within(wizard).getByRole("button", { name: "Create book" }),
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(within(wizard).getByLabelText("Title")).toHaveProperty(
+      "value",
+      "Second book",
     );
+    expect(createBookCalls(calls)).toHaveLength(1);
+    expect(saveBookCalls(calls)).toHaveLength(0);
+  });
+
+  it("Don’t Save proceeds without saving and closes the replaced book", async () => {
+    const calls = mockBackend();
+    render(<App />);
+    await createViaWizard("First book");
+
+    await submitNewBook("Second book");
+    const guard = await screen.findByRole("alertdialog", {
+      name: /Do you want to save the changes/,
+    });
+    fireEvent.click(within(guard).getByRole("button", { name: "Don’t Save" }));
     await screen.findByText("Second book");
+    expect(screen.queryByRole("dialog", { name: "New Book" })).toBeNull();
 
     expect(saveBookCalls(calls)).toHaveLength(0);
     expect(createBookCalls(calls)).toHaveLength(2);
@@ -383,33 +404,45 @@ describe("dirty guard on 'New book…'", () => {
     );
   });
 
-  it("Save saves first (save-as for a sourceless book), then proceeds", async () => {
+  it("Save saves first (save-as for a sourceless book), then creates", async () => {
     const calls = mockBackend();
     render(<App />);
     await createViaWizard("First book");
 
-    fireEvent.click(screen.getByRole("button", { name: "New book…" }));
-    const guard = await screen.findByRole("dialog", {
-      name: "Unsaved changes",
+    await submitNewBook("Second book");
+    const guard = await screen.findByRole("alertdialog", {
+      name: /Do you want to save the changes/,
     });
     savePicks.push("/out/first.epub");
-    fireEvent.click(within(guard).getByRole("button", { name: "Save all" }));
+    fireEvent.click(within(guard).getByRole("button", { name: "Save" }));
 
-    // save_book ran (save-as path) and the wizard opened afterwards.
     await waitFor(() => expect(saveBookCalls(calls)).toHaveLength(1));
     expect(saveBookCalls(calls)[0].args).toEqual({
       bookId: "new-book-1",
       path: "/out/first.epub",
     });
-    const wizard = await screen.findByRole("dialog", { name: "New book" });
-    fireEvent.change(within(wizard).getByLabelText("Title"), {
-      target: { value: "Second book" },
-    });
-    fireEvent.click(
-      within(wizard).getByRole("button", { name: "Create book" }),
-    );
     await screen.findByText("Second book");
     expect(createBookCalls(calls)).toHaveLength(2);
+  });
+
+  it("cancelling Save As inside the guard blocks the transition", async () => {
+    const calls = mockBackend();
+    render(<App />);
+    await createViaWizard("First book");
+
+    await submitNewBook("Second book");
+    const guard = await screen.findByRole("alertdialog", {
+      name: /Do you want to save the changes/,
+    });
+    savePicks.push(null);
+    fireEvent.click(within(guard).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(savePickCalls).toHaveLength(1));
+    // Still the first book, still unsaved; the form is still up.
+    expect(createBookCalls(calls)).toHaveLength(1);
+    expect(saveBookCalls(calls)).toHaveLength(0);
+    screen.getByRole("dialog", { name: "New Book" });
+    expect(dirtyIndicator()).not.toBeNull();
   });
 
   it("no guard when the book is clean", async () => {
@@ -417,11 +450,11 @@ describe("dirty guard on 'New book…'", () => {
     render(<App />);
     await openViaDialog(savedEpub3Fixture(), "Épübzïlla — 世界の本 ✓");
 
-    fireEvent.click(screen.getByRole("button", { name: "New book…" }));
+    fireEvent.click(screen.getByRole("button", { name: "New Book…" }));
     // Straight to the wizard — no unsaved-changes modal.
-    await screen.findByRole("dialog", { name: "New book" });
+    await screen.findByRole("dialog", { name: "New Book" });
     expect(
-      screen.queryByRole("dialog", { name: "Unsaved changes" }),
+      screen.queryByRole("alertdialog", { name: /Do you want to save the changes/ }),
     ).toBeNull();
   });
 });

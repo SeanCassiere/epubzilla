@@ -68,7 +68,7 @@ afterEach(() => {
 async function openBook(): Promise<void> {
   mockBackend([epub3Fixture()]);
   render(<App />);
-  fireEvent.click(screen.getByRole("button", { name: "Open book…" }));
+  fireEvent.click(screen.getByRole("button", { name: "Open Book…" }));
   await screen.findByRole("complementary", { name: "Table of contents" });
 }
 

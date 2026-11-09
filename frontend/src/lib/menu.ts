@@ -1,6 +1,7 @@
 // Native-menu bridge (issue #74). Like lib/api.ts / lib/dialog.ts /
-// lib/window.ts, this is the only module that may import
-// `@tauri-apps/api/event` — UI code goes through this helper.
+// lib/window.ts, this is an adapter module: it and lib/shellEvents.ts are
+// the only modules that may import `@tauri-apps/api/event` — UI code goes
+// through these helpers.
 //
 // The Rust shell (crates/app/src/menu.rs) emits `app-menu` with the
 // activated menu-item id; ids are ShortcutAction names, so the bridge just

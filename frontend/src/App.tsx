@@ -1,14 +1,19 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { ReaderProvider, useReader } from "./state/reader";
+import { LifecycleProvider } from "./state/lifecycle";
 import { Header } from "./components/Header";
 import { ReaderPane } from "./components/ReaderPane";
 import { Sidebar } from "./components/Sidebar";
 import { SidebarResizeHandle } from "./components/SidebarResizeHandle";
 import { UpdateNotice } from "./components/UpdateNotice";
+import { ErrorBanner } from "./components/ErrorBanner";
+import { DropOverlay } from "./components/DropOverlay";
+import { LifecycleDialogs } from "./components/LifecycleDialogs";
 import { SIDEBAR_WIDTH_KEY, parseSidebarWidth } from "./lib/sidebarWidth";
 import { handleShortcutKeydown } from "./lib/shortcuts";
 import { bridgeMenuEvents } from "./lib/menu";
 import "./App.css";
+import "./styles/lifecycle.css";
 
 // Shell body (issue #61): a full-height sidebar column on the left, with
 // the header living INSIDE the right-hand content column so the sidebar
@@ -36,9 +41,12 @@ function MainArea({
       )}
       <main className="app-content">
         <Header />
+        <ErrorBanner />
         <UpdateNotice />
         <ReaderPane />
       </main>
+      <LifecycleDialogs />
+      <DropOverlay />
     </>
   );
 }
@@ -48,7 +56,8 @@ function App() {
   // App-wide keyboard shortcuts (issue #74): one window keydown matcher
   // dispatching on the shortcut bus, plus the native-menu bridge so Tauri
   // menu accelerators land on the same bus. Components subscribe to the
-  // actions they own (Header: file actions; Sidebar: tabs; ReaderPane:
+  // actions they own (lifecycle controller: file actions; Header: editor
+  // toggle; Sidebar: tabs; ReaderPane:
   // chapter nav, layout, theme).
   useEffect(() => {
     window.addEventListener("keydown", handleShortcutKeydown);
@@ -68,15 +77,17 @@ function App() {
   // the data-platform attribute main.tsx stamps on <html>.
   return (
     <ReaderProvider>
-      <div
-        className="app-shell"
-        style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
-      >
-        <MainArea
-          sidebarWidth={sidebarWidth}
-          onSidebarResize={setSidebarWidth}
-        />
-      </div>
+      <LifecycleProvider>
+        <div
+          className="app-shell"
+          style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
+        >
+          <MainArea
+            sidebarWidth={sidebarWidth}
+            onSidebarResize={setSidebarWidth}
+          />
+        </div>
+      </LifecycleProvider>
     </ReaderProvider>
   );
 }

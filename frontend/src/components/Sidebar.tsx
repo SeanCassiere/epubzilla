@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useReader } from "../state/reader";
+import { useLifecycle } from "../state/lifecycle";
 import { resourceUrl } from "../lib/api";
 import { onShortcut } from "../lib/shortcuts";
 import { TocSidebar } from "./TocSidebar";
@@ -19,7 +20,12 @@ type Tab = "contents" | "chapters" | "checks";
  */
 export function Sidebar() {
   const { book } = useReader();
-  const [tab, setTab] = useState<Tab>("contents");
+  // A book just made with New Book starts on Chapters so "Add chapter"
+  // is one click away; opened books start on Contents.
+  const { createdBookId } = useLifecycle();
+  const [tab, setTab] = useState<Tab>(() =>
+    book !== null && book.id === createdBookId ? "chapters" : "contents",
+  );
 
   // Per-tab scroll offsets (issue #89). Every panel's root element is the
   // `.toc-sidebar` scroll container inside the focus wrapper.

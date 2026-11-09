@@ -14,6 +14,7 @@ import { handleChapterClick } from "../lib/chapterClick";
 import { handleShortcutKeydown, onShortcut } from "../lib/shortcuts";
 import * as api from "../lib/api";
 import { EditorPane } from "./EditorPane";
+import { Welcome } from "./Welcome";
 
 /** Manifest media types rendered as chapters (inter-chapter link targets). */
 const XHTML_MEDIA_TYPES: ReadonlySet<string> = new Set([
@@ -263,7 +264,7 @@ export function ReaderPane() {
   if (book === null) {
     return (
       <section className="reader-pane">
-        <p className="empty">No book open. Use “Open book…” to pick an EPUB.</p>
+        <Welcome />
       </section>
     );
   }

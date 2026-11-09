@@ -292,16 +292,17 @@ describe("unified unsaved-changes guard", () => {
 
     // Only the editor buffer is pending (the book itself is clean).
     fireEvent.change(buffer(), { target: { value: `${MD}\n\nPending.` } });
-    epubPicks.push("/books/fixture.epub");
-    fireEvent.click(screen.getByRole("button", { name: "Open book…" }));
+    epubPicks.push("/books/other.epub");
+    fireEvent.click(screen.getByRole("button", { name: "Open Book…" }));
 
     // Exactly one dialog — the unified guard, not the editor's own.
-    const guard = await screen.findByRole("dialog", {
-      name: "Unsaved changes",
+    const guard = await screen.findByRole("alertdialog", {
+      name: /Do you want to save the changes/,
     });
-    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+    expect(screen.queryAllByRole("dialog")).toHaveLength(0);
 
-    fireEvent.click(within(guard).getByRole("button", { name: "Save all" }));
+    fireEvent.click(within(guard).getByRole("button", { name: "Save" }));
     // The FIRST open_book opened the fixture; the guard's proceed is the
     // second one.
     await waitFor(() =>
@@ -329,12 +330,12 @@ describe("unified unsaved-changes guard", () => {
     await openFixtureAndEdit(calls);
 
     fireEvent.change(buffer(), { target: { value: "doomed" } });
-    epubPicks.push("/books/fixture.epub");
-    fireEvent.click(screen.getByRole("button", { name: "Open book…" }));
-    const guard = await screen.findByRole("dialog", {
-      name: "Unsaved changes",
+    epubPicks.push("/books/other.epub");
+    fireEvent.click(screen.getByRole("button", { name: "Open Book…" }));
+    const guard = await screen.findByRole("alertdialog", {
+      name: /Do you want to save the changes/,
     });
-    fireEvent.click(within(guard).getByRole("button", { name: "Discard" }));
+    fireEvent.click(within(guard).getByRole("button", { name: "Don’t Save" }));
 
     await waitFor(() =>
       expect(calls.filter((c) => c.cmd === "open_book")).toHaveLength(2),
@@ -351,13 +352,16 @@ describe("unified unsaved-changes guard", () => {
     await openFixtureAndEdit(calls);
 
     fireEvent.change(buffer(), { target: { value: "keep me" } });
-    fireEvent.click(screen.getByRole("button", { name: "Open book…" }));
-    const guard = await screen.findByRole("dialog", {
-      name: "Unsaved changes",
+    // Prepare-then-guard: the picker runs first, the guard only once a
+    // file was actually chosen.
+    epubPicks.push("/books/other.epub");
+    fireEvent.click(screen.getByRole("button", { name: "Open Book…" }));
+    const guard = await screen.findByRole("alertdialog", {
+      name: /Do you want to save the changes/,
     });
     fireEvent.click(within(guard).getByRole("button", { name: "Cancel" }));
 
-    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(buffer().value).toBe("keep me");
     // open_book never ran (the only earlier open was the fixture itself).
     expect(calls.filter((c) => c.cmd === "open_book")).toHaveLength(1);
