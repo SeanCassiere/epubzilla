@@ -10,7 +10,8 @@ import { MetadataForm } from "./MetadataForm";
 
 /**
  * HIG unsaved-changes sheet: Don't Save (destructive, set apart) · Cancel ·
- * Save (default). Return = Save, Esc = Cancel.
+ * Save (default). Return = Save, Esc = Cancel. The shared .modal-actions
+ * recipe pushes the destructive button to the far left.
  */
 export function UnsavedChangesSheet({
   title,
@@ -32,7 +33,7 @@ export function UnsavedChangesSheet({
       <p className="sheet-body" id={bodyId}>
         Your changes will be lost if you don’t save them.
       </p>
-      <div className="sheet-actions">
+      <div className="modal-actions sheet-actions">
         <button
           type="button"
           data-variant="destructive"
@@ -41,7 +42,6 @@ export function UnsavedChangesSheet({
         >
           Don’t Save
         </button>
-        <span className="sheet-actions-spacer" />
         <button
           type="button"
           data-variant="secondary"

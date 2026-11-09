@@ -16,7 +16,7 @@ export function ErrorBanner() {
       : null);
   if (shown === null) return null;
   return (
-    <div className="error-banner" role="alert">
+    <div className="error-banner banner" data-tone="danger" role="alert">
       <p className="error-banner-message">{shown.message}</p>
       {shown.details !== null && (
         <details className="error-banner-details">
@@ -34,8 +34,16 @@ export function ErrorBanner() {
             Save As…
           </button>
         )}
-        <button type="button" data-variant="plain" onClick={dismissNotice}>
-          Dismiss
+        <button
+          type="button"
+          className="error-banner-dismiss"
+          data-variant="plain"
+          data-icon
+          aria-label="Dismiss"
+          title="Dismiss"
+          onClick={dismissNotice}
+        >
+          ×
         </button>
       </div>
     </div>
