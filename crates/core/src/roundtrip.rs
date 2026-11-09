@@ -5,13 +5,13 @@
 //! Scope: **body content only**. The XHTML document frame (`<html>`,
 //! `<head>`, charset, CSS links) is owned by the core elsewhere and is never
 //! seen by this module — both functions operate on the children of `<body>`.
-//! When footnotes are present the produced fragment uses the `epub:` prefix;
+//! When footnotes or alerts are present the produced fragment uses the `epub:` prefix;
 //! the caller must ensure `xmlns:epub="http://www.idpf.org/2007/ops"` is
 //! declared on the document element.
 //!
-//! - [`markdown_to_xhtml`] always succeeds (CommonMark + GFM tables and
-//!   strikethrough + footnotes; raw HTML in the Markdown is escaped as text
-//!   so the output is always XML-well-formed).
+//! - [`markdown_to_xhtml`] always succeeds (the contract's CommonMark/GFM
+//!   subset, heading attributes, and footnotes). Raw HTML is escaped except
+//!   standalone empty-paragraph breaks; output is XML-well-formed.
 //! - [`xhtml_to_markdown`] succeeds only for the supported subset; anything
 //!   else returns [`CoreError::ConversionLossy`] naming the offending
 //!   construct. Conversion is never lossy.
@@ -20,7 +20,11 @@
 //! attaches that class to the following block; headings take the Pandoc
 //! trailing form (`## Title {.classname}`).
 
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use std::collections::{HashMap, HashSet};
+
+use pulldown_cmark::{
+    Alignment, BlockQuoteKind, CodeBlockKind, Event, LinkType, Options, Parser, Tag, TagEnd,
+};
 use quick_xml::events::Event as XmlEvent;
 use quick_xml::Reader;
 
@@ -30,7 +34,7 @@ use crate::error::{CoreError, CoreResult};
 // Markdown → XHTML
 // ---------------------------------------------------------------------------
 
-/// Convert Markdown (CommonMark + GFM tables/strikethrough + footnotes) to an
+/// Convert the contract's Markdown flavor to an
 /// XML-well-formed XHTML body fragment. Always succeeds.
 pub fn markdown_to_xhtml(md: &str) -> String {
     let mut options = Options::empty();
@@ -38,11 +42,47 @@ pub fn markdown_to_xhtml(md: &str) -> String {
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_FOOTNOTES);
     options.insert(Options::ENABLE_HEADING_ATTRIBUTES);
-    let parser = Parser::new_ext(md, options);
-
+    options.insert(Options::ENABLE_GFM);
+    options.insert(Options::ENABLE_TASKLISTS);
+    let md: String = md.chars().filter(|c| xml_char(*c)).collect();
+    let events: Vec<_> = Parser::new_ext(&md, options).collect();
     let mut w = XhtmlWriter::default();
-    for event in parser {
-        w.event(event);
+    // Reserve derived footnote ids before assigning user-authored heading ids.
+    let mut counts = HashMap::<String, usize>::new();
+    for event in &events {
+        match event {
+            Event::FootnoteReference(name) => {
+                let count = counts.entry(name.to_string()).or_default();
+                *count += 1;
+                w.ids.insert(reference_id(name, *count));
+            }
+            Event::Start(Tag::FootnoteDefinition(name)) => {
+                w.ids.insert(format!("fn-{name}"));
+            }
+            _ => {}
+        }
+    }
+    let mut events = events.into_iter().peekable();
+    while let Some(event) = events.next() {
+        if matches!(event, Event::Start(Tag::Item)) {
+            // Loose items have a paragraph between the item and its marker.
+            let paragraph = matches!(events.peek(), Some(Event::Start(Tag::Paragraph)));
+            if paragraph {
+                events.next();
+            }
+            if let Some(Event::TaskListMarker(done)) = events.peek() {
+                let state = if *done { "done" } else { "open" };
+                w.sink()
+                    .push_str(&format!("<li class=\"task-item task-{state}\">"));
+            } else {
+                w.event(event);
+            }
+            if paragraph {
+                w.event(Event::Start(Tag::Paragraph));
+            }
+        } else {
+            w.event(event);
+        }
     }
     w.finish()
 }
@@ -53,10 +93,11 @@ struct XhtmlWriter {
     /// Buffer for the paragraph currently being written (paragraphs are
     /// buffered so `{.classname}` annotation paragraphs can be intercepted).
     para: Option<String>,
+    raw_html: Option<String>,
     /// Buffer for the footnote definition currently being written.
     footnote: Option<(String, String)>,
-    /// `(src, alt)` while inside an image (children render to plain alt text).
-    image: Option<(String, String)>,
+    /// `(src, alt, title)` while inside an image (children render to plain alt text).
+    image: Option<(String, String, String)>,
     /// Class waiting to be attached to the next block element.
     pending_class: Option<String>,
     /// Completed footnote definitions, in source order.
@@ -64,6 +105,12 @@ struct XhtmlWriter {
     /// Footnote names in order of first reference (defines numbering).
     ref_order: Vec<String>,
     in_table_head: bool,
+    alignments: Vec<Alignment>,
+    column: usize,
+    ids: HashSet<String>,
+    ref_counts: HashMap<String, usize>,
+    emitted_reference_ids: HashSet<String>,
+    backlinks: HashMap<String, Vec<String>>,
 }
 
 impl XhtmlWriter {
@@ -95,16 +142,17 @@ impl XhtmlWriter {
 
     fn event(&mut self, event: Event<'_>) {
         // Inside an image, children only contribute to the alt text.
-        if let Some((_, alt)) = self.image.as_mut() {
+        if let Some((_, alt, _)) = self.image.as_mut() {
             match event {
                 Event::Text(t) | Event::Code(t) => alt.push_str(&t),
                 Event::SoftBreak | Event::HardBreak => alt.push(' '),
                 Event::End(TagEnd::Image) => {
-                    let (src, alt) = self.image.take().expect("image state");
+                    let (src, alt, title) = self.image.take().expect("image state");
                     let tag = format!(
-                        "<img src=\"{}\" alt=\"{}\"/>",
+                        "<img src=\"{}\" alt=\"{}\"{}/>",
                         esc_attr(&src),
-                        esc_attr(&alt)
+                        esc_attr(&alt),
+                        title_attr(&title)
                     );
                     self.sink().push_str(&tag);
                 }
@@ -124,9 +172,15 @@ impl XhtmlWriter {
                 self.sink().push_str(&code);
             }
             // Raw HTML is escaped as text: output must stay XML-well-formed.
-            Event::Html(t) | Event::InlineHtml(t) => {
-                let escaped = esc_text(&t);
-                self.sink().push_str(&escaped);
+            Event::Html(t) => {
+                if let Some(html) = &mut self.raw_html {
+                    html.push_str(&t);
+                } else {
+                    self.sink().push_str(&esc_text(&t));
+                }
+            }
+            Event::InlineHtml(t) => {
+                self.sink().push_str(&esc_text(&t));
             }
             Event::SoftBreak => self.sink().push('\n'),
             Event::HardBreak => self.sink().push_str("<br/>\n"),
@@ -143,30 +197,67 @@ impl XhtmlWriter {
                         self.ref_order.len()
                     }
                 };
+                let count = self.ref_counts.entry(name.to_string()).or_default();
+                *count += 1;
+                let reference = reference_id(&name, *count);
+                // A label like "note-2" can collide with the second reference
+                // to "note". Keep the first id, and never link a backlink to
+                // an anchor owned by a different occurrence.
+                let id = if self.emitted_reference_ids.insert(reference.clone()) {
+                    self.backlinks
+                        .entry(name.to_string())
+                        .or_default()
+                        .push(reference.clone());
+                    format!(" id=\"{}\"", esc_attr(&reference))
+                } else {
+                    String::new()
+                };
                 let anchor = format!(
-                    "<a epub:type=\"noteref\" href=\"#fn-{}\">{n}</a>",
+                    "<a epub:type=\"noteref\" role=\"doc-noteref\"{id} href=\"#fn-{}\"><sup>{n}</sup></a>",
                     esc_attr(&name)
                 );
                 self.sink().push_str(&anchor);
             }
-            Event::TaskListMarker(_) | Event::InlineMath(_) | Event::DisplayMath(_) => {}
+            Event::TaskListMarker(done) => {
+                let (label, symbol) = if done {
+                    ("Completed", "☑")
+                } else {
+                    ("Not completed", "☐")
+                };
+                self.sink().push_str(&format!("<span class=\"task-marker\" role=\"img\" aria-label=\"{label}\">{symbol}</span> "));
+            }
+            Event::InlineMath(_) | Event::DisplayMath(_) => {}
         }
     }
 
     fn start(&mut self, tag: Tag<'_>) {
         match tag {
             Tag::Paragraph => self.para = Some(String::new()),
-            Tag::Heading { level, classes, .. } => {
+            Tag::HtmlBlock => self.raw_html = Some(String::new()),
+            Tag::Heading {
+                level, id, classes, ..
+            } => {
                 let cls = if classes.is_empty() {
                     self.class_attr()
                 } else {
                     self.pending_class = None;
                     format!(" class=\"{}\"", esc_attr(&classes.join(" ")))
                 };
-                let open = format!("<h{}{cls}>", level as usize);
+                let id = id
+                    .filter(|id| self.ids.insert(id.to_string()))
+                    .map(|id| format!(" id=\"{}\"", esc_attr(&id)))
+                    .unwrap_or_default();
+                let open = format!("<h{}{id}{cls}>", level as usize);
                 self.sink().push_str(&open);
             }
-            Tag::BlockQuote(_) => {
+            Tag::BlockQuote(Some(kind)) => {
+                let (name, epub_type, role, title) = alert_signature(kind);
+                self.pending_class = None;
+                self.sink().push_str(&format!(
+                    "<aside class=\"alert alert-{name}\" epub:type=\"{epub_type}\" role=\"{role}\">\n<p class=\"alert-title\">{title}</p>\n"
+                ));
+            }
+            Tag::BlockQuote(None) => {
                 let cls = self.class_attr();
                 let open = format!("<blockquote{cls}>\n");
                 self.sink().push_str(&open);
@@ -200,29 +291,62 @@ impl XhtmlWriter {
             Tag::FootnoteDefinition(name) => {
                 self.footnote = Some((name.to_string(), String::new()));
             }
-            Tag::Table(_) => {
+            Tag::Table(alignments) => {
+                self.alignments = alignments;
                 let cls = self.class_attr();
                 let open = format!("<table{cls}>\n");
                 self.sink().push_str(&open);
             }
             Tag::TableHead => {
                 self.in_table_head = true;
+                self.column = 0;
                 self.sink().push_str("<thead>\n<tr>\n");
             }
-            Tag::TableRow => self.sink().push_str("<tr>\n"),
+            Tag::TableRow => {
+                self.column = 0;
+                self.sink().push_str("<tr>\n");
+            }
             Tag::TableCell => {
-                let cell = if self.in_table_head { "<th>" } else { "<td>" };
-                self.sink().push_str(cell);
+                let (cell, scope) = if self.in_table_head {
+                    ("th", " scope=\"col\"")
+                } else {
+                    ("td", "")
+                };
+                let alignment = match self.alignments.get(self.column) {
+                    Some(Alignment::Left) => "left",
+                    Some(Alignment::Center) => "center",
+                    Some(Alignment::Right) => "right",
+                    _ => "",
+                };
+                let style = if alignment.is_empty() {
+                    String::new()
+                } else {
+                    format!(" style=\"text-align: {alignment}\"")
+                };
+                self.column += 1;
+                self.sink().push_str(&format!("<{cell}{scope}{style}>"));
             }
             Tag::Emphasis => self.sink().push_str("<em>"),
             Tag::Strong => self.sink().push_str("<strong>"),
             Tag::Strikethrough => self.sink().push_str("<del>"),
-            Tag::Link { dest_url, .. } => {
-                let open = format!("<a href=\"{}\">", esc_attr(&dest_url));
+            Tag::Link {
+                dest_url,
+                title,
+                link_type,
+                ..
+            } => {
+                let dest_url = if link_type == LinkType::Email {
+                    format!("mailto:{dest_url}")
+                } else {
+                    dest_url.to_string()
+                };
+                let open = format!("<a href=\"{}\"{}>", esc_attr(&dest_url), title_attr(&title));
                 self.sink().push_str(&open);
             }
-            Tag::Image { dest_url, .. } => {
-                self.image = Some((dest_url.to_string(), String::new()));
+            Tag::Image {
+                dest_url, title, ..
+            } => {
+                self.image = Some((dest_url.to_string(), String::new(), title.to_string()));
             }
             _ => {}
         }
@@ -230,6 +354,15 @@ impl XhtmlWriter {
 
     fn end(&mut self, tag: TagEnd) {
         match tag {
+            TagEnd::HtmlBlock => {
+                let html = self.raw_html.take().unwrap_or_default();
+                if matches!(html.trim(), "<br>" | "<br/>" | "<br />") {
+                    let cls = self.class_attr();
+                    self.write_block(&format!("<p{cls}><br/></p>\n"));
+                } else {
+                    self.sink().push_str(&esc_text(&html));
+                }
+            }
             TagEnd::Paragraph => {
                 let buf = self.para.take().unwrap_or_default();
                 if let Some(class) = parse_annotation(buf.trim()) {
@@ -244,7 +377,8 @@ impl XhtmlWriter {
                 let close = format!("</h{}>\n", level as usize);
                 self.sink().push_str(&close);
             }
-            TagEnd::BlockQuote(_) => self.sink().push_str("</blockquote>\n"),
+            TagEnd::BlockQuote(None) => self.sink().push_str("</blockquote>\n"),
+            TagEnd::BlockQuote(Some(_)) => self.sink().push_str("</aside>\n"),
             TagEnd::CodeBlock => self.sink().push_str("</code></pre>\n"),
             TagEnd::List(ordered) => {
                 let close = if ordered { "</ol>\n" } else { "</ul>\n" };
@@ -294,12 +428,57 @@ impl XhtmlWriter {
         }
         ordered.append(&mut self.defs);
         for (name, body) in ordered {
+            let backlinks = self
+                .backlinks
+                .get(&name)
+                .into_iter()
+                .flatten()
+                .map(|id| format!("<a role=\"doc-backlink\" href=\"#{}\">↩</a>", esc_attr(id)))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let backlinks = if backlinks.is_empty() {
+                String::new()
+            } else {
+                format!("<p>{backlinks}</p>\n")
+            };
             self.out.push_str(&format!(
-                "<aside epub:type=\"footnote\" id=\"fn-{}\">\n{body}</aside>\n",
+                "<aside epub:type=\"footnote\" role=\"doc-footnote\" id=\"fn-{}\">\n{body}{backlinks}</aside>\n",
                 esc_attr(&name)
             ));
         }
         self.out
+    }
+}
+
+fn reference_id(name: &str, count: usize) -> String {
+    if count == 1 {
+        format!("fnref-{name}")
+    } else {
+        format!("fnref-{name}-{count}")
+    }
+}
+
+fn title_attr(title: &str) -> String {
+    if title.is_empty() {
+        String::new()
+    } else {
+        format!(" title=\"{}\"", esc_attr(title))
+    }
+}
+
+fn xml_char(c: char) -> bool {
+    matches!(c, '\t' | '\n' | '\r' | '\u{20}'..='\u{d7ff}' | '\u{e000}'..='\u{fffd}' | '\u{10000}'..='\u{10ffff}')
+}
+
+fn alert_signature(
+    kind: BlockQuoteKind,
+) -> (&'static str, &'static str, &'static str, &'static str) {
+    match kind {
+        BlockQuoteKind::Note => ("note", "notice", "note", "Note"),
+        BlockQuoteKind::Tip => ("tip", "tip", "doc-tip", "Tip"),
+        BlockQuoteKind::Important => ("important", "notice", "note", "Important"),
+        BlockQuoteKind::Warning => ("warning", "notice", "doc-notice", "Warning"),
+        BlockQuoteKind::Caution => ("caution", "notice", "doc-notice", "Caution"),
     }
 }
 
@@ -324,7 +503,8 @@ fn esc_text(s: &str) -> String {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
-            _ => out.push(ch),
+            _ if xml_char(ch) => out.push(ch),
+            _ => {}
         }
     }
     out
@@ -338,7 +518,8 @@ fn esc_attr(s: &str) -> String {
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
-            _ => out.push(ch),
+            _ if xml_char(ch) => out.push(ch),
+            _ => {}
         }
     }
     out
@@ -354,7 +535,7 @@ fn esc_attr(s: &str) -> String {
 /// lossily.
 pub fn xhtml_to_markdown(xhtml_body: &str) -> CoreResult<String> {
     let nodes = parse_tree(xhtml_body)?;
-    let mut ctx = MdCtx::default();
+    let mut ctx = validate_generated_content(&nodes)?;
     let mut blocks = nodes_to_blocks(&nodes, &mut ctx)?;
     blocks.append(&mut ctx.footnotes);
     let mut md = blocks.join("\n\n");
@@ -372,11 +553,13 @@ fn lossy(detail: impl Into<String>) -> CoreError {
 
 // --- lightweight DOM ---
 
+#[derive(Clone)]
 enum Node {
     Elem(Elem),
     Text(String),
 }
 
+#[derive(Clone)]
 struct Elem {
     name: String,
     attrs: Vec<(String, String)>,
@@ -510,6 +693,11 @@ impl Elem {
                         self.name
                     )));
                 }
+                if parse_annotation(&format!("{{.{c}}}")).is_none() {
+                    return Err(lossy(format!(
+                        "class {c:?} cannot be represented by a block annotation"
+                    )));
+                }
                 Ok(Some(c.to_string()))
             }
         }
@@ -522,6 +710,7 @@ impl Elem {
 struct MdCtx {
     /// Footnote definition blocks, appended at the end of the document.
     footnotes: Vec<String>,
+    references: HashMap<String, usize>,
 }
 
 const BLOCK_ELEMS: &[&str] = &[
@@ -580,6 +769,13 @@ fn elem_to_blocks(el: &Elem, ctx: &mut MdCtx) -> CoreResult<Vec<String>> {
         "p" => {
             el.check_attrs(&["class"])?;
             let class = el.single_class()?;
+            if let [Node::Elem(br)] = significant_nodes(&el.children).as_slice() {
+                if br.name == "br" {
+                    br.check_attrs(&[])?;
+                    require_empty(br)?;
+                    return Ok(annotated(class, "<br />".to_string()));
+                }
+            }
             let text = inline_to_md(&el.children, false)?;
             if text.trim().is_empty() {
                 return Ok(Vec::new()); // whitespace-only element: dropped
@@ -587,13 +783,34 @@ fn elem_to_blocks(el: &Elem, ctx: &mut MdCtx) -> CoreResult<Vec<String>> {
             Ok(annotated(class, finish_paragraph(&text)))
         }
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
-            el.check_attrs(&["class"])?;
+            el.check_attrs(&["class", "id"])?;
             let class = el.single_class()?;
             let level = el.name[1..].parse::<usize>().unwrap_or(1);
             let text = inline_to_md(&el.children, false)?;
+            // With no authored attributes to follow it, a literal trailing
+            // {...} would be consumed as heading metadata on the next write.
+            if el.attr("id").is_none()
+                && class.is_none()
+                && text.trim_end().ends_with('}')
+                && text.contains('{')
+            {
+                return Err(lossy(
+                    "literal trailing heading attributes cannot be preserved",
+                ));
+            }
             let mut line = format!("{} {}", "#".repeat(level), text.trim());
+            let mut attrs = Vec::new();
+            if let Some(id) = el.attr("id") {
+                if !attribute_token(id) {
+                    return Err(lossy("heading id cannot be represented in Markdown"));
+                }
+                attrs.push(format!("#{id}"));
+            }
             if let Some(c) = class {
-                line.push_str(&format!(" {{.{c}}}"));
+                attrs.push(format!(".{c}"));
+            }
+            if !attrs.is_empty() {
+                line.push_str(&format!(" {{{}}}", attrs.join(" ")));
             }
             Ok(vec![line])
         }
@@ -647,18 +864,26 @@ fn elem_to_blocks(el: &Elem, ctx: &mut MdCtx) -> CoreResult<Vec<String>> {
             Ok(annotated(class, table_to_md(el)?))
         }
         "aside" => {
+            if el.attr("class").is_some() {
+                return alert_to_md(el, ctx);
+            }
             let epub_type = el.attr("epub:type").unwrap_or_default();
-            if !epub_type.split_whitespace().any(|t| t == "footnote") {
+            if epub_type != "footnote" {
                 return Err(lossy(format!(
                     "<aside epub:type=\"{epub_type}\"> (only footnote asides are supported)"
                 )));
             }
-            el.check_attrs(&["epub:type", "id"])?;
+            el.check_attrs(&["epub:type", "id", "role"])?;
+            check_role(el, "doc-footnote")?;
             let id = el
                 .attr("id")
                 .ok_or_else(|| lossy("footnote <aside> without an id"))?;
-            let name = id.strip_prefix("fn-").unwrap_or(id);
-            let blocks = nodes_to_blocks(&el.children, ctx)?;
+            let name = id
+                .strip_prefix("fn-")
+                .filter(|name| footnote_label(name))
+                .ok_or_else(|| lossy("footnote id is outside the generated fn- scheme"))?;
+            let children = footnote_body(el, name, ctx)?;
+            let blocks = nodes_to_blocks(&children, ctx)?;
             let mut def = format!("[^{name}]:");
             for (i, block) in blocks.iter().enumerate() {
                 if i == 0 {
@@ -697,6 +922,323 @@ fn elem_to_blocks(el: &Elem, ctx: &mut MdCtx) -> CoreResult<Vec<String>> {
             nodes_to_blocks(&el.children, ctx)
         }
         other => Err(lossy(format!("unsupported element <{other}>"))),
+    }
+}
+
+fn significant_nodes(nodes: &[Node]) -> Vec<&Node> {
+    nodes
+        .iter()
+        .filter(|node| !matches!(node, Node::Text(t) if t.trim().is_empty()))
+        .collect()
+}
+
+fn plain_text(nodes: &[Node]) -> Option<String> {
+    nodes
+        .iter()
+        .map(|node| match node {
+            Node::Text(text) => Some(text.as_str()),
+            Node::Elem(_) => None,
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(|parts| parts.concat())
+}
+
+fn attribute_token(token: &str) -> bool {
+    !token.is_empty()
+        && token
+            .chars()
+            .all(|c| !c.is_whitespace() && !matches!(c, '{' | '}' | '\\'))
+}
+
+fn footnote_label(label: &str) -> bool {
+    attribute_token(label) && !label.contains(['[', ']'])
+}
+
+fn check_role(el: &Elem, expected: &str) -> CoreResult<()> {
+    if el.attr("role").is_some_and(|role| role != expected) {
+        return Err(lossy(format!("unexpected role on <{}>", el.name)));
+    }
+    Ok(())
+}
+
+fn noteref_label(el: &Elem) -> CoreResult<&str> {
+    el.attr("href")
+        .and_then(|href| href.strip_prefix("#fn-"))
+        .filter(|name| footnote_label(name))
+        .ok_or_else(|| lossy("noteref href is outside the generated #fn- scheme"))
+}
+
+/// Validate the entire reference graph before discarding any derived ids/text.
+fn validate_generated_content(nodes: &[Node]) -> CoreResult<MdCtx> {
+    fn visit(
+        nodes: &[Node],
+        ids: &mut HashSet<String>,
+        notes: &mut HashSet<String>,
+        order: &mut Vec<String>,
+        ctx: &mut MdCtx,
+    ) -> CoreResult<()> {
+        for node in nodes {
+            let Node::Elem(el) = node else { continue };
+            if let Some(id) = el.attr("id") {
+                if !ids.insert(id.to_string()) {
+                    return Err(lossy(format!("duplicate id {id:?}")));
+                }
+            }
+            if el.name == "aside" && el.attr("epub:type") == Some("footnote") {
+                if let Some(name) = el.attr("id").and_then(|id| id.strip_prefix("fn-")) {
+                    // CommonMark footnote labels are case insensitive.
+                    if notes
+                        .iter()
+                        .any(|known| known.to_lowercase() == name.to_lowercase())
+                    {
+                        return Err(lossy("duplicate footnote label"));
+                    }
+                    notes.insert(name.to_string());
+                }
+            }
+            if el.name == "a" && el.attr("epub:type") == Some("noteref") {
+                let name = noteref_label(el)?;
+                if !order.iter().any(|n| n == name) {
+                    order.push(name.to_string());
+                }
+                let number = order.iter().position(|n| n == name).unwrap() + 1;
+                let count = ctx.references.entry(name.to_string()).or_default();
+                *count += 1;
+                if el
+                    .attr("id")
+                    .is_some_and(|id| id != reference_id(name, *count))
+                {
+                    return Err(lossy("noteref id does not match its label and occurrence"));
+                }
+                let children = match el.children.as_slice() {
+                    [Node::Elem(sup)] if sup.name == "sup" => {
+                        sup.check_attrs(&[])?;
+                        &sup.children
+                    }
+                    children => children,
+                };
+                if plain_text(children).as_deref() != Some(number.to_string().as_str()) {
+                    return Err(lossy(
+                        "custom noteref text (expected derived footnote number)",
+                    ));
+                }
+            }
+            visit(&el.children, ids, notes, order, ctx)?;
+        }
+        Ok(())
+    }
+    let mut ctx = MdCtx::default();
+    let mut notes = HashSet::new();
+    visit(
+        nodes,
+        &mut HashSet::new(),
+        &mut notes,
+        &mut Vec::new(),
+        &mut ctx,
+    )?;
+    if ctx.references.keys().any(|name| !notes.contains(name)) {
+        return Err(lossy("noteref without a matching footnote definition"));
+    }
+    let mut reference_ids = HashSet::new();
+    for (name, count) in &ctx.references {
+        for occurrence in 1..=*count {
+            if !reference_ids.insert(reference_id(name, occurrence)) {
+                return Err(lossy("footnote labels produce colliding reference ids"));
+            }
+        }
+    }
+    Ok(ctx)
+}
+
+fn footnote_body(el: &Elem, name: &str, ctx: &MdCtx) -> CoreResult<Vec<Node>> {
+    let mut children = el.children.clone();
+    while matches!(children.last(), Some(Node::Text(t)) if t.trim().is_empty()) {
+        children.pop();
+    }
+    if let Some(Node::Elem(p)) = children.last() {
+        let links = significant_nodes(&p.children);
+        if p.name == "p"
+            && links
+                .iter()
+                .any(|n| matches!(n, Node::Elem(a) if a.attr("role") == Some("doc-backlink")))
+        {
+            p.check_attrs(&[])?;
+            let count = ctx.references.get(name).copied().unwrap_or(0);
+            if links.len() != count || count == 0 {
+                return Err(lossy("incomplete footnote backlinks"));
+            }
+            for (index, node) in links.iter().enumerate() {
+                let Node::Elem(a) = node else {
+                    return Err(lossy("custom backlink text"));
+                };
+                a.check_attrs(&["role", "href"])?;
+                if a.name != "a"
+                    || a.attr("role") != Some("doc-backlink")
+                    || a.attr("href")
+                        != Some(format!("#{}", reference_id(name, index + 1)).as_str())
+                    || plain_text(&a.children).as_deref() != Some("↩")
+                {
+                    return Err(lossy("custom footnote backlink"));
+                }
+            }
+            children.pop();
+        }
+    }
+    Ok(children)
+}
+
+fn alert_to_md(el: &Elem, ctx: &mut MdCtx) -> CoreResult<Vec<String>> {
+    el.check_attrs(&["class", "epub:type", "role"])?;
+    for kind in [
+        BlockQuoteKind::Note,
+        BlockQuoteKind::Tip,
+        BlockQuoteKind::Important,
+        BlockQuoteKind::Warning,
+        BlockQuoteKind::Caution,
+    ] {
+        let (name, epub_type, role, title) = alert_signature(kind);
+        if el.attr("class") != Some(format!("alert alert-{name}").as_str()) {
+            continue;
+        }
+        if el.attr("epub:type") != Some(epub_type) || el.attr("role") != Some(role) {
+            return Err(lossy("alert signature does not match its kind"));
+        }
+        let mut children = el.children.as_slice();
+        while matches!(children.first(), Some(Node::Text(t)) if t.trim().is_empty()) {
+            children = &children[1..];
+        }
+        if let Some(Node::Elem(p)) = children.first() {
+            if p.name == "p" && p.attr("class") == Some("alert-title") {
+                p.check_attrs(&["class"])?;
+                if plain_text(&p.children).as_deref() != Some(title) {
+                    return Err(lossy("custom alert title"));
+                }
+                children = &children[1..];
+            }
+        }
+        let body = nodes_to_blocks(children, ctx)?.join("\n\n");
+        let mut lines = vec![format!("> [!{}]", name.to_uppercase())];
+        lines.extend(body.lines().map(|line| {
+            if line.is_empty() {
+                ">".to_string()
+            } else {
+                format!("> {line}")
+            }
+        }));
+        return Ok(vec![lines.join("\n")]);
+    }
+    Err(lossy("unknown aside signature"))
+}
+
+fn task_body(li: &Elem) -> CoreResult<(Elem, &'static str)> {
+    li.check_attrs(&["class"])?;
+    let done = match li.attr("class") {
+        None => return Ok((li.clone(), "")),
+        Some("task-item task-done") => true,
+        Some("task-item task-open") => false,
+        _ => return Err(lossy("unknown task item signature")),
+    };
+    let mut li = li.clone();
+    let mut children = &mut li.children;
+    if matches!(children.first(), Some(Node::Elem(p)) if p.name == "p") {
+        let Node::Elem(p) = &mut children[0] else {
+            unreachable!()
+        };
+        children = &mut p.children;
+    }
+    let Some(Node::Elem(span)) = children.first() else {
+        return Err(lossy("task item without marker"));
+    };
+    span.check_attrs(&["class", "role", "aria-label"])?;
+    let (label, symbol, marker) = if done {
+        ("Completed", "☑", "[x] ")
+    } else {
+        ("Not completed", "☐", "[ ] ")
+    };
+    if span.name != "span"
+        || span.attr("class") != Some("task-marker")
+        || span.attr("role") != Some("img")
+        || span.attr("aria-label") != Some(label)
+        || plain_text(&span.children).as_deref() != Some(symbol)
+    {
+        return Err(lossy("custom task marker"));
+    }
+    children.remove(0);
+    // The writer inserts one separating space; ordinary inline whitespace is normalized.
+    if let Some(Node::Text(text)) = children.first_mut() {
+        *text = text.trim_start().to_string();
+    }
+    Ok((li, marker))
+}
+
+fn cell_alignment(el: &Elem) -> CoreResult<Alignment> {
+    el.check_attrs(if el.name == "th" {
+        &["style", "align", "scope"]
+    } else {
+        &["style", "align"]
+    })?;
+    if el.attr("scope").is_some_and(|scope| scope != "col") {
+        return Err(lossy("unsupported table header scope"));
+    }
+    let parse = |value: &str| match value.trim() {
+        "left" => Ok(Alignment::Left),
+        "center" => Ok(Alignment::Center),
+        "right" => Ok(Alignment::Right),
+        _ => Err(lossy("unsupported table alignment")),
+    };
+    let style = el
+        .attr("style")
+        .map(|style| {
+            let style = style
+                .trim()
+                .strip_suffix(';')
+                .unwrap_or(style.trim())
+                .trim();
+            let (property, value) = style
+                .split_once(':')
+                .ok_or_else(|| lossy("unsupported table style"))?;
+            if property.trim() != "text-align" {
+                return Err(lossy("unsupported table style"));
+            }
+            parse(value)
+        })
+        .transpose()?;
+    let legacy = el.attr("align").map(parse).transpose()?;
+    if style.is_some() && legacy.is_some() && style != legacy {
+        return Err(lossy("conflicting table alignment attributes"));
+    }
+    Ok(style.or(legacy).unwrap_or(Alignment::None))
+}
+
+/// Protect entity-looking literals without needlessly changing ordinary query separators.
+fn escape_entities(text: &str) -> String {
+    let mut out = String::new();
+    for (index, c) in text.char_indices() {
+        if c == '&' {
+            let tail = &text[index + 1..];
+            let entity = tail.split_once(';').is_some_and(|(name, _)| {
+                !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '#')
+            });
+            if entity {
+                out.push_str("&amp;");
+                continue;
+            }
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn markdown_title(el: &Elem) -> CoreResult<String> {
+    match el.attr("title") {
+        None => Ok(String::new()),
+        Some("") => Err(lossy("empty title attribute cannot be preserved")),
+        Some(title) => Ok(format!(
+            " \"{}\"",
+            escape_entities(title)
+                .replace('\\', "\\\\")
+                .replace('"', "&quot;")
+        )),
     }
 }
 
@@ -781,14 +1323,14 @@ fn list_to_md(el: &Elem, start: Option<u64>, ctx: &mut MdCtx) -> CoreResult<Stri
     });
     let mut lines: Vec<String> = Vec::new();
     for (i, li) in items.iter().enumerate() {
-        li.check_attrs(&[])?;
+        let (li, task) = task_body(li)?;
         let marker = match start {
             Some(s) => format!("{}. ", s + i as u64),
             None => "- ".to_string(),
         };
-        let blocks = li_to_blocks(li, ctx)?;
+        let blocks = li_to_blocks(&li, ctx)?;
         let joiner = if loose { "\n\n" } else { "\n" };
-        let body = blocks.join(joiner);
+        let body = format!("{task}{}", blocks.join(joiner));
         let indented = indent_continuation(&body, marker.len());
         lines.push(format!("{marker}{indented}"));
         if loose && i + 1 < items.len() {
@@ -838,8 +1380,8 @@ fn li_to_blocks(li: &Elem, ctx: &mut MdCtx) -> CoreResult<Vec<String>> {
 }
 
 fn table_to_md(el: &Elem) -> CoreResult<String> {
-    let mut header: Option<Vec<String>> = None;
-    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut header: Option<Vec<(String, Alignment)>> = None;
+    let mut rows: Vec<Vec<(String, Alignment)>> = Vec::new();
     for child in &el.children {
         match child {
             Node::Text(t) if t.trim().is_empty() => {}
@@ -864,18 +1406,43 @@ fn table_to_md(el: &Elem) -> CoreResult<String> {
     }
     let header = header.ok_or_else(|| lossy("<table> without a <thead> header row"))?;
     let mut out = String::new();
-    out.push_str(&format!("| {} |", header.join(" | ")));
+    let cell_text = |row: &[(String, Alignment)]| {
+        row.iter()
+            .map(|(text, _)| text.as_str())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+    out.push_str(&format!("| {} |", cell_text(&header)));
     out.push('\n');
-    out.push_str(&format!("|{}|", vec![" --- "; header.len()].join("|")));
+    if header.is_empty() {
+        return Err(lossy("table has no columns"));
+    }
+    let separators = header
+        .iter()
+        .map(|(_, alignment)| match alignment {
+            Alignment::None => " --- ",
+            Alignment::Left => " :--- ",
+            Alignment::Center => " :---: ",
+            Alignment::Right => " ---: ",
+        })
+        .collect::<Vec<_>>()
+        .join("|");
+    out.push_str(&format!("|{separators}|"));
     for row in rows {
+        if row.len() != header.len() || row.iter().zip(&header).any(|(cell, head)| cell.1 != head.1)
+        {
+            return Err(lossy(
+                "table body alignment or column count disagrees with header",
+            ));
+        }
         out.push('\n');
-        out.push_str(&format!("| {} |", row.join(" | ")));
+        out.push_str(&format!("| {} |", cell_text(&row)));
     }
     Ok(out)
 }
 
 /// Rows of a `<thead>`/`<tbody>`, with cells of `cell_name`.
-fn table_rows(section: &Elem, cell_name: &str) -> CoreResult<Vec<Vec<String>>> {
+fn table_rows(section: &Elem, cell_name: &str) -> CoreResult<Vec<Vec<(String, Alignment)>>> {
     let mut rows = Vec::new();
     for child in &section.children {
         match child {
@@ -900,9 +1467,9 @@ fn table_rows(section: &Elem, cell_name: &str) -> CoreResult<Vec<Vec<String>>> {
                             if c.attr("colspan").is_some() || c.attr("rowspan").is_some() {
                                 return Err(lossy(format!("colspan/rowspan on <{}>", c.name)));
                             }
-                            c.check_attrs(&[])?;
+                            let alignment = cell_alignment(c)?;
                             let text = inline_to_md(&c.children, true)?;
-                            cells.push(text.trim().to_string());
+                            cells.push((text.trim().to_string(), alignment));
                         }
                         Node::Elem(c) => {
                             return Err(lossy(format!(
@@ -971,38 +1538,67 @@ fn inline_elem_to_md(el: &Elem, in_table: bool) -> CoreResult<String> {
         }
         "a" => {
             let epub_type = el.attr("epub:type").unwrap_or_default();
-            if epub_type.split_whitespace().any(|t| t == "noteref") {
-                el.check_attrs(&["epub:type", "href", "id"])?;
-                let href = el
-                    .attr("href")
-                    .ok_or_else(|| lossy("noteref <a> without an href"))?;
-                let target = href.strip_prefix('#').ok_or_else(|| {
-                    lossy(format!(
-                        "noteref href \"{href}\" is not a fragment reference"
-                    ))
-                })?;
-                let name = target.strip_prefix("fn-").unwrap_or(target);
+            if epub_type == "noteref" {
+                el.check_attrs(&["epub:type", "href", "id", "role"])?;
+                check_role(el, "doc-noteref")?;
+                let name = noteref_label(el)?;
                 return Ok(format!("[^{name}]"));
             }
             if !epub_type.is_empty() {
                 return Err(lossy(format!("epub:type=\"{epub_type}\" on <a>")));
             }
-            el.check_attrs(&["href"])?;
+            el.check_attrs(&["href", "title"])?;
             let href = el
                 .attr("href")
                 .ok_or_else(|| lossy("<a> without an href"))?;
             let inner = inline_to_md(&el.children, in_table)?;
-            Ok(format!("[{}]({})", inner.trim(), link_dest(href)))
+            let plain = plain_text(&el.children);
+            if el.attr("title").is_none() {
+                if let Some(plain) = plain {
+                    let candidate = if href == plain {
+                        Some(href)
+                    } else {
+                        href.strip_prefix("mailto:")
+                            .filter(|address| *address == plain)
+                    };
+                    if let Some(candidate) = candidate {
+                        let md = format!("<{candidate}>");
+                        // Ask CommonMark whether this really is an autolink.
+                        if let Some(Event::Start(Tag::Link {
+                            dest_url,
+                            link_type,
+                            ..
+                        })) = Parser::new(&md).nth(1)
+                        {
+                            let destination = if link_type == LinkType::Email {
+                                format!("mailto:{dest_url}")
+                            } else {
+                                dest_url.to_string()
+                            };
+                            if destination == href {
+                                return Ok(md);
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(format!(
+                "[{}]({}{})",
+                inner.trim(),
+                link_dest(href),
+                markdown_title(el)?
+            ))
         }
         "img" => {
-            el.check_attrs(&["src", "alt"])?;
+            el.check_attrs(&["src", "alt", "title"])?;
             let src = el.attr("src").ok_or_else(|| lossy("<img> without a src"))?;
             let alt = el.attr("alt").unwrap_or_default();
             require_empty(el)?;
             Ok(format!(
-                "![{}]({})",
+                "![{}]({}{})",
                 escape_md(alt, in_table),
-                link_dest(src)
+                link_dest(src),
+                markdown_title(el)?
             ))
         }
         "br" => {
@@ -1038,6 +1634,10 @@ fn code_span(content: &str) -> String {
 /// Link destination, angle-bracketed when it contains characters that would
 /// break the inline form.
 fn link_dest(url: &str) -> String {
+    let url = escape_entities(url)
+        .replace('\\', "\\\\")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
     if url
         .chars()
         .any(|c| c.is_whitespace() || c == '(' || c == ')')
@@ -1295,15 +1895,149 @@ mod tests {
     }
 
     #[test]
-    fn noteref_without_fn_prefix_uses_raw_id() {
-        assert_eq!(
-            to_md("<p>x<a epub:type=\"noteref\" href=\"#other\">1</a></p>"),
-            "x[^other]\n"
+    fn noteref_outside_generated_scheme_is_rejected() {
+        assert!(
+            detail("<p>x<a epub:type=\"noteref\" href=\"#other\">1</a></p>").contains("scheme")
         );
     }
 
     #[test]
     fn footnote_aside_without_id_is_rejected() {
         assert!(detail("<aside epub:type=\"footnote\"><p>x</p></aside>").contains("without an id"));
+    }
+    #[test]
+    fn empty_paragraph_variants_and_raw_html_boundary() {
+        for br in ["<br>", "<br/>", "<br />"] {
+            assert_eq!(markdown_to_xhtml(br), "<p><br/></p>\n");
+        }
+        for md in [
+            "before <br /> after",
+            "<br class=\"custom\"/>",
+            "<br />\ntext",
+            "`<br />`",
+        ] {
+            assert!(!markdown_to_xhtml(md).contains("<p><br/></p>"), "{md}");
+        }
+        let md = "> <br />\n";
+        assert_eq!(to_md(&markdown_to_xhtml(md)), md);
+    }
+
+    #[test]
+    fn unknown_and_escaped_alert_markers_remain_plain() {
+        for md in ["> [!UNKNOWN]\n> Body.", "> \\[!NOTE]\n> Body."] {
+            let xhtml = markdown_to_xhtml(md);
+            assert!(xhtml.contains("<blockquote>"));
+            assert!(!xhtml.contains("<aside"));
+            let canonical = to_md(&xhtml);
+            assert!(!markdown_to_xhtml(&canonical).contains("<aside"));
+            assert_eq!(to_md(&markdown_to_xhtml(&canonical)), canonical);
+        }
+        let md = "> [!NOTE]\n> Outer.\n>\n> > [!TIP]\n> > Inner.\n";
+        assert_eq!(to_md(&markdown_to_xhtml(md)), md);
+    }
+
+    #[test]
+    fn legacy_footnotes_and_optional_alert_title_are_supported() {
+        let old = "<p>Ref<a epub:type=\"noteref\" href=\"#fn-a\">1</a></p><aside epub:type=\"footnote\" id=\"fn-a\"><p>Note.</p></aside>";
+        assert_eq!(to_md(old), "Ref[^a]\n\n[^a]: Note.\n");
+        let alert = "<aside class=\"alert alert-note\" epub:type=\"notice\" role=\"note\"><p>Body.</p></aside>";
+        assert_eq!(to_md(alert), "> [!NOTE]\n> Body.\n");
+    }
+
+    #[test]
+    fn derived_content_must_match_exactly() {
+        let valid = markdown_to_xhtml("Ref[^a] and again[^a].\n\n[^a]: Note.\n");
+        for invalid in [
+            valid.replace("fnref-a-2", "fnref-a-3"),
+            valid.replace("<sup>1</sup>", "<sup class=\"custom\">1</sup>"),
+            valid.replace("doc-noteref", "button"),
+            valid.replace("doc-footnote", "note"),
+            valid.replace("href=\"#fnref-a\"", "href=\"#other\""),
+        ] {
+            assert!(xhtml_to_markdown(&invalid).is_err(), "{invalid}");
+        }
+        for invalid in [
+            "<aside class=\"alert alert-note\" epub:type=\"notice\" role=\"doc-tip\"><p>Body.</p></aside>",
+            "<ul><li class=\"task-item task-open\"><span class=\"task-marker\" role=\"img\" aria-label=\"Completed\">☐</span> Task</li></ul>",
+            "<ul><li><span class=\"task-marker\" role=\"img\" aria-label=\"Completed\">☑</span> Task</li></ul>",
+        ] {
+            assert!(xhtml_to_markdown(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn table_alignment_aliases_and_styles_are_narrow() {
+        let table = "<table><thead><tr><th scope=\"col\" style=\" text-align : left ; \">H</th></tr></thead><tbody><tr><td align=\"left\">B</td></tr></tbody></table>";
+        assert_eq!(to_md(table), "| H |\n| :--- |\n| B |\n");
+        for invalid in [
+            table.replace("scope=\"col\"", "scope=\"row\""),
+            table.replace("text-align : left ;", "text-align: left; text-align: left;"),
+            table.replace(
+                "align=\"left\"",
+                "align=\"left\" style=\"text-align: right\"",
+            ),
+            table.replace("align=\"left\"", ""),
+        ] {
+            assert!(xhtml_to_markdown(&invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn titles_and_urls_preserve_entities_quotes_and_percent_encoding() {
+        let xhtml = "<p><a href=\"../a%20b.xhtml?q=1&amp;x=&amp;copy;#here\" title=\"A &quot;quote&quot; &amp;copy;\">Link</a> <img src=\"a(b).png\" alt=\"A [cover]\" title=\"Cover &quot;title&quot;\"/></p>\n";
+        assert_eq!(markdown_to_xhtml(&to_md(xhtml)), xhtml);
+        let titled =
+            "<p><a href=\"https://example.com\" title=\"Title\">https://example.com</a></p>";
+        assert!(to_md(titled).starts_with("[https://example.com]("));
+        let md = "<https://example.com/?a=1&b=2>\n";
+        assert_eq!(to_md(&markdown_to_xhtml(md)), md);
+    }
+
+    #[test]
+    fn xml_illegal_characters_are_removed_in_all_contexts() {
+        let md = "# A\u{1} {#he\u{2}ad}\n\nTe\u{b}xt [li\u{c}nk](a\u{e}.xhtml \"ti\u{ffff}tle\")\n\n`co\u{1f}de`\n";
+        let xhtml = markdown_to_xhtml(md);
+        assert!(xhtml.chars().all(xml_char));
+        assert!(xhtml.contains("id=\"head\""));
+        assert!(xhtml.contains("href=\"a.xhtml\" title=\"title\""));
+        assert!(xhtml.contains("<code>code</code>"));
+        assert!(parse_tree(&xhtml).is_ok());
+    }
+
+    #[test]
+    fn duplicate_heading_ids_keep_first_and_do_not_shadow_footnotes() {
+        let md = include_str!("../tests/fixtures/roundtrip/write/016-heading-id-duplicate.md");
+        let expected =
+            include_str!("../tests/fixtures/roundtrip/write/016-heading-id-duplicate.xhtml");
+        assert_eq!(markdown_to_xhtml(md), expected);
+        assert_eq!(markdown_to_xhtml(&to_md(expected)), expected);
+        let xhtml =
+            markdown_to_xhtml("# Ref {#fnref-a}\n\n# Note {#fn-a}\n\nRef[^a].\n\n[^a]: Note.\n");
+        assert!(xhtml.starts_with("<h1>Ref</h1>\n<h1>Note</h1>"));
+        assert!(xhtml_to_markdown(&xhtml).is_ok());
+    }
+    #[test]
+    fn email_shaped_relative_link_is_not_promoted_to_mailto() {
+        let xhtml = "<p><a href=\"a@example.com\">a@example.com</a></p>\n";
+        assert_eq!(markdown_to_xhtml(&to_md(xhtml)), xhtml);
+    }
+
+    #[test]
+    fn colliding_footnote_reference_ids_keep_first_and_force_source_mode() {
+        let xhtml = markdown_to_xhtml(
+            "A[^note] B[^note] C[^note-2].\n\n[^note]: First.\n\n[^note-2]: Second.\n",
+        );
+        assert_eq!(xhtml.matches("id=\"fnref-note-2\"").count(), 1);
+        assert!(xhtml_to_markdown(&xhtml).is_err());
+    }
+
+    #[test]
+    fn heading_attributes_and_noteref_labels_must_survive_regeneration() {
+        for id in ["a.b", "a#b", "a&b", "a:b", "a-b", "a_b", "é"] {
+            let xhtml = format!("<h2 id=\"{}\">Title</h2>\n", esc_attr(id));
+            assert_eq!(markdown_to_xhtml(&to_md(&xhtml)), xhtml);
+        }
+        let mismatched = "<p>Ref<a epub:type=\"noteref\" href=\"#fn-a\">1</a></p><aside epub:type=\"footnote\" id=\"fn-A\"><p>Note.</p></aside>";
+        assert!(xhtml_to_markdown(mismatched).is_err());
     }
 }

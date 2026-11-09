@@ -873,6 +873,26 @@ impl Session {
             if is_xhtml {
                 match open.read_entry(&path) {
                     Ok(bytes) => {
+                        let mut targets: Vec<_> = refs::relative_link_targets(&bytes, &path)
+                            .into_iter()
+                            .collect();
+                        targets.sort();
+                        for target in targets {
+                            if !open
+                                .book
+                                .resources
+                                .iter()
+                                .any(|resource| resource.path == target)
+                            {
+                                issues.push(ValidationIssue {
+                                    severity: Severity::Warning,
+                                    location: Some(path.clone()),
+                                    message: format!(
+                                        "relative link target {target:?} is not in the manifest"
+                                    ),
+                                });
+                            }
+                        }
                         if let Err(detail) = xml_well_formed(&bytes) {
                             issues.push(error(
                                 Some(path.clone()),

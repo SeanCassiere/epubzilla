@@ -37,6 +37,34 @@ pub(crate) fn xhtml_refs(bytes: &[u8], doc_path: &str) -> HashSet<String> {
     out
 }
 
+/// Relative anchor targets for validation; fragments/queries are not resources.
+/// External, protocol-relative and root-relative URLs are outside this check.
+pub(crate) fn relative_link_targets(bytes: &[u8], doc_path: &str) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let mut reader = Reader::from_reader(bytes);
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.local_name().as_ref() == "a" => {
+                for attr in e.attributes().flatten() {
+                    if attr.key.as_ref() != "href" {
+                        continue;
+                    }
+                    if let Ok(value) = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0) {
+                        if !value.trim().starts_with('/') {
+                            if let Some(path) = resolve_ref(parent_dir(doc_path), &value) {
+                                out.insert(path);
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    out
+}
+
 fn collect_element_refs(element: &BytesStart, base_dir: &str, out: &mut HashSet<String>) {
     for attr in element.attributes().with_checks(false).flatten() {
         let name = attr.key.as_ref();
