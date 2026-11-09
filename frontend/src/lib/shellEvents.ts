@@ -41,9 +41,17 @@ export function onOpenFiles(
   );
 }
 
-/** ⌘Q / Quit menu item: run the guard, then api.quitApp(). */
-export function onQuitRequested(handler: () => void): Promise<() => void> {
-  return subscribe<unknown>(QUIT_REQUESTED_EVENT, () => handler());
+/**
+ * ⌘Q / Quit menu item: acknowledge (api.ackQuitRequest) with the request
+ * id, run the guard, then api.quitApp(). The id is null if the payload is
+ * missing (older shells, tests).
+ */
+export function onQuitRequested(
+  handler: (request: number | null) => void,
+): Promise<() => void> {
+  return subscribe<unknown>(QUIT_REQUESTED_EVENT, (payload) =>
+    handler(typeof payload === "number" ? payload : null),
+  );
 }
 
 /** The shell's recent-books list changed (e.g. File ▸ Open Recent ▸ Clear Menu). */
