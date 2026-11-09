@@ -209,11 +209,19 @@ impl LifecycleState {
         true
     }
 
-    /// The native prompt closed; `quit` is the user's answer.
+    /// The native prompt closed; `quit` is the user's answer. On Cancel the
+    /// outstanding request is forgotten: the frontend may never answer it,
+    /// and leaving it set would send every later ⌘Q straight to the native
+    /// prompt, skipping the frontend's Save / Don't Save guard for good.
+    /// The next ⌘Q asks the frontend again, with a fresh timeout.
     pub fn end_native_prompt(&self, quit: bool) {
-        self.tracker().prompt_open = false;
+        let mut tracker = self.tracker();
+        tracker.prompt_open = false;
         if quit {
+            drop(tracker);
             self.confirm_quit();
+        } else {
+            tracker.unacknowledged = None;
         }
     }
 
@@ -576,6 +584,41 @@ mod tests {
         assert_eq!(
             state.on_exit_requested(Some(0), || false),
             ExitAction::Allow
+        );
+    }
+
+    #[test]
+    fn cancelling_the_native_prompt_asks_the_frontend_again() {
+        let state = LifecycleState::default();
+        state.take_pending();
+        // A quit the frontend never acknowledges (queued behind a stuck
+        // operation), then a repeat ⌘Q: the native prompt.
+        assert_eq!(
+            state.on_exit_requested(Some(0), || false),
+            ExitAction::AskFrontend { request: 1 }
+        );
+        assert_eq!(
+            state.on_exit_requested(Some(0), || false),
+            ExitAction::AskNative
+        );
+        assert!(state.begin_native_prompt());
+        state.end_native_prompt(false);
+        // Cancel: the stale request no longer counts, so the next ⌘Q goes to
+        // the frontend's guard with its own timeout instead of straight to
+        // the native prompt.
+        assert!(!state.ack_overdue(1));
+        assert_eq!(
+            state.on_exit_requested(Some(0), || false),
+            ExitAction::AskFrontend { request: 2 }
+        );
+        assert!(state.ack_overdue(2));
+        // A late ack of the forgotten request changes nothing about the new one.
+        state.acknowledge(1);
+        assert!(state.ack_overdue(2));
+        // …and still escalates if that one goes unanswered too.
+        assert_eq!(
+            state.on_exit_requested(Some(0), || false),
+            ExitAction::AskNative
         );
     }
 

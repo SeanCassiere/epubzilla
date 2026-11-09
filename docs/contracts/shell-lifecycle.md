@@ -58,7 +58,8 @@ unit-tested):
 The native prompt is a blocking `tauri-plugin-dialog` message dialog, at
 most one at a time: “epubzilla isn’t responding. Quit anyway? Unsaved
 changes may be lost.” **Quit** confirms and exits; **Cancel** keeps the app
-running (a later ⌘Q asks again). So ⌘Q is never dead, even with a hung or
+running and forgets the unanswered request, so a later ⌘Q goes to the
+frontend's guard again with a fresh 2 s timeout. So ⌘Q is never dead, even with a hung or
 crashed webview.
 
 The frontend never drops a quit request either: while a lifecycle
