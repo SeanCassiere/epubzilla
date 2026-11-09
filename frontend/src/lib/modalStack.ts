@@ -34,6 +34,15 @@ export function isTopModal(id: number): boolean {
   return stack.length > 0 && stack[stack.length - 1] === id;
 }
 
+/**
+ * Stacking position of `id` (1 = bottom); 0 when not open. Modals paint in
+ * this order, so the one that owns the keyboard is also the one on top,
+ * whatever their DOM order.
+ */
+export function modalDepth(id: number): number {
+  return stack.indexOf(id) + 1;
+}
+
 /** Whether any modal is open. */
 export function anyModalOpen(): boolean {
   return stack.length > 0;

@@ -12,10 +12,11 @@ import {
   useId,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
-import { isTopModal, popModal, pushModal } from "../lib/modalStack";
+import { isTopModal, modalDepth, popModal, pushModal } from "../lib/modalStack";
 
 const FOCUSABLE =
   "button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), " +
@@ -59,12 +60,14 @@ export function Modal({
     typeof document === "undefined" ? null : document.activeElement,
   );
   const idRef = useRef<number | null>(null);
+  const [depth, setDepth] = useState(0);
   const handlersRef = useRef({ onCancel, onEnter });
   handlersRef.current = { onCancel, onEnter };
 
   useEffect(() => {
     const id = pushModal();
     idRef.current = id;
+    setDepth(modalDepth(id));
     const surface = surfaceRef.current;
     if (surface !== null && !surface.contains(document.activeElement)) {
       const preferred =
@@ -138,7 +141,10 @@ export function Modal({
   };
 
   return (
-    <div className="modal-overlay">
+    <div
+      className="modal-overlay"
+      style={{ "--modal-depth": depth } as CSSProperties}
+    >
       <div
         ref={surfaceRef}
         className={className === undefined ? "modal" : `modal ${className}`}

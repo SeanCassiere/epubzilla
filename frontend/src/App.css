@@ -1068,7 +1068,9 @@ li[aria-current="true"] > .toc-row,
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 10;
+  /* Later-opened modals paint above earlier ones (Modal sets the depth),
+     so the visible top sheet is the one receiving keys and focus. */
+  z-index: calc(10 + var(--modal-depth, 0));
 }
 
 .modal {

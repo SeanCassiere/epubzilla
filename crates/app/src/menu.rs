@@ -61,11 +61,13 @@ pub fn enablement(state: MenuState) -> Vec<(&'static str, bool)> {
         ("save", has_book && editable && !busy),
         ("save-as", has_book && editable && !busy),
         ("toggle-edit", has_book && editable && !busy),
-        ("prev-chapter", has_book),
-        ("next-chapter", has_book),
-        ("sidebar-contents", has_book),
-        ("sidebar-chapters", has_book),
-        ("sidebar-checks", has_book),
+        // Navigation and panel focus would act behind (or pull focus out
+        // of) a pending decision, so they follow `busy` too.
+        ("prev-chapter", has_book && !busy),
+        ("next-chapter", has_book && !busy),
+        ("sidebar-contents", has_book && !busy),
+        ("sidebar-chapters", has_book && !busy),
+        ("sidebar-checks", has_book && !busy),
     ]
 }
 
@@ -317,16 +319,27 @@ mod tests {
     }
 
     #[test]
-    fn busy_blocks_lifecycle_items() {
+    fn busy_blocks_lifecycle_and_navigation_items() {
         let busy = MenuState {
             has_book: true,
             editable: true,
             busy: true,
         };
-        for id in ["new-book", "open-book", "close-book", "save", "save-as"] {
+        for id in [
+            "new-book",
+            "open-book",
+            "close-book",
+            "save",
+            "save-as",
+            "toggle-edit",
+            "prev-chapter",
+            "next-chapter",
+            "sidebar-contents",
+            "sidebar-chapters",
+            "sidebar-checks",
+        ] {
             assert!(!enabled(busy, id), "{id} should be disabled while busy");
         }
-        assert!(enabled(busy, "next-chapter"));
     }
 
     #[test]

@@ -17,6 +17,12 @@
 // are deliberately NOT routed through this module: they stay modifier-free
 // and are guarded per-context in ReaderPane. Everything here requires
 // Cmd (macOS) / Ctrl, so the two layers cannot collide.
+//
+// While any modal is open only the modal owns the keyboard: actions are
+// dropped at the bus (theme cycling excepted), so a shortcut or menu item
+// can never navigate, toggle the editor or pull focus behind a decision.
+
+import { anyModalOpen } from "./modalStack";
 
 /** Every app-level shortcut action. One id namespace shared with the menu. */
 export type ShortcutAction =
@@ -160,11 +166,20 @@ const EVENT_NAME = "epubzilla:shortcut";
 
 const lastDispatch = new Map<ShortcutAction, DispatchRecord>();
 
+/** Actions still honoured while a modal is open (they touch no document). */
+const ALLOWED_UNDER_MODAL: ReadonlySet<ShortcutAction> = new Set(["cycle-theme"]);
+
+/** Whether `action` may run now, given whether a modal is open. */
+export function allowedWithModal(action: ShortcutAction, modalOpen: boolean): boolean {
+  return !modalOpen || ALLOWED_UNDER_MODAL.has(action);
+}
+
 /** Fire one action on the app bus (deduped, see shouldDispatch). */
 export function dispatchShortcut(
   action: ShortcutAction,
   source: ShortcutSource = "key",
 ): void {
+  if (!allowedWithModal(action, anyModalOpen())) return;
   if (!shouldDispatch(action, source, Date.now(), lastDispatch)) return;
   window.dispatchEvent(new CustomEvent(EVENT_NAME, { detail: action }));
 }
