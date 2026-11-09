@@ -17,6 +17,7 @@ import { setWindowTitle } from "./window";
 import {
   anyModalOpen,
   isTopModal,
+  modalDepth,
   popModal,
   pushModal,
   subscribeModals,
@@ -54,13 +55,18 @@ describe("shell events", () => {
   it("delivers quit requests and recents changes", async () => {
     let quits = 0;
     const lists: string[][] = [];
-    const stopQuit = await onQuitRequested(() => {
+    const requests: Array<number | null> = [];
+    const stopQuit = await onQuitRequested((request) => {
       quits += 1;
+      requests.push(request);
     });
     const stopRecents = await onRecentBooksChanged((list) => lists.push(list));
+    await emit("app-quit-requested", 3);
     await emit("app-quit-requested");
     await emit("recent-books-changed", ["/a.epub"]);
-    expect(quits).toBe(1);
+    expect(quits).toBe(2);
+    // The request id to acknowledge; null when the payload is missing.
+    expect(requests).toEqual([3, null]);
     expect(lists).toEqual([["/a.epub"]]);
     stopQuit();
     stopRecents();
@@ -113,6 +119,8 @@ describe("modal registry", () => {
     const b = pushModal();
     expect(isTopModal(b)).toBe(true);
     expect(isTopModal(a)).toBe(false);
+    // Paint order follows open order, so the key owner is on top.
+    expect([modalDepth(a), modalDepth(b)]).toEqual([1, 2]);
     popModal(b);
     expect(isTopModal(a)).toBe(true);
     popModal(a);

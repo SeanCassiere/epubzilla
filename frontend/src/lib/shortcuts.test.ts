@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { popModal, pushModal } from "./modalStack";
 import {
   DEDUPE_WINDOW_MS,
+  allowedWithModal,
   dispatchShortcut,
   handleShortcutKeydown,
   matchShortcut,
@@ -186,5 +188,37 @@ describe("handleShortcutKeydown", () => {
     off();
     expect(event.defaultPrevented).toBe(false);
     expect(seen).toEqual([]);
+  });
+});
+
+describe("shortcuts behind a modal", () => {
+  it("only theme cycling is honoured while a modal is open", () => {
+    expect(allowedWithModal("next-chapter", false)).toBe(true);
+    for (const action of [
+      "next-chapter",
+      "prev-chapter",
+      "toggle-edit",
+      "sidebar-chapters",
+      "open-book",
+      "save",
+    ] as const) {
+      expect(allowedWithModal(action, true)).toBe(false);
+    }
+    expect(allowedWithModal("cycle-theme", true)).toBe(true);
+  });
+
+  it("drops actions on the bus while a modal is registered", () => {
+    const seen: ShortcutAction[] = [];
+    const off = onShortcut((action) => seen.push(action));
+    const id = pushModal();
+    try {
+      dispatchShortcut("prev-chapter", "menu");
+      expect(seen).toEqual([]);
+    } finally {
+      popModal(id);
+    }
+    dispatchShortcut("prev-chapter", "menu");
+    expect(seen).toEqual(["prev-chapter"]);
+    off();
   });
 });
