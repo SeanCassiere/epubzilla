@@ -22,6 +22,7 @@ const reader = vi.hoisted(() => ({
   writeChapter: vi.fn(async () => true), setNavGuard: vi.fn(),
   setEditorBuffer: vi.fn<(buffer: { modified: () => boolean } | null) => void>(),
   addResource: vi.fn(), addResourceBytes: vi.fn(),
+  notifyEditorModified: vi.fn(), frozen: false,
 }));
 vi.mock("../state/reader", () => ({ useReader: () => reader, describeError: String }));
 vi.mock("../lib/dialog", () => ({ pickImageFile: vi.fn() }));
