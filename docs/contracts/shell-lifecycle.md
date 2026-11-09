@@ -49,17 +49,32 @@ unit-tested):
   `quit_app` / the native prompt's Quit confirmed it.
 - **No frontend listening** (never loaded, unmounted, reloading): allowed
   when the core has no unsaved changes; otherwise the native prompt below.
-- **A previous quit request is still unacknowledged** (a second ⌘Q while
-  the webview is hung, crashed or gone): the native prompt, at once.
+- **A previous quit request is still unacknowledged** (a repeat ⌘Q): the
+  native prompt at once if that request's 2 s timeout already ran out (the
+  webview is hung, crashed or gone); otherwise the exit is held and the
+  timeout decides. A quick double ⌘Q therefore never flags a healthy
+  webview that is a moment late to answer.
 - **Otherwise** it is prevented, the window is un-minimized, shown and
   focused, and `app-quit-requested` is emitted with a new id. If that id is
   not acknowledged within 2 s, the native prompt is shown.
 
-The native prompt is a blocking `tauri-plugin-dialog` message dialog, at
-most one at a time: “epubzilla isn’t responding. Quit anyway? Unsaved
-changes may be lost.” **Quit** confirms and exits; **Cancel** keeps the app
-running and forgets the unanswered request, so a later ⌘Q goes to the
-frontend's guard again with a fresh 2 s timeout. So ⌘Q is never dead, even with a hung or
+**Native pickers suspend the timeout.** On macOS the open and save panels
+are sheets on the main window, and the webview may not get to deliver its
+acknowledgement while one is up. When the timeout runs out with a sheet or
+an app-modal window on screen (checked on the main thread through AppKit),
+it is suspended; a repeat ⌘Q is held meanwhile, and a fresh 2 s timeout
+starts when the panel closes. A healthy app with a picker up never gets the
+prompt.
+
+The native prompt is a `tauri-plugin-dialog` message dialog, at most one at
+a time, titled “epubzilla isn’t responding” with “Quit anyway? Unsaved
+changes may be lost.” It is shown with the plugin's non-blocking API as a
+sheet on the main window, which is brought forward and focused first; the
+run loop never waits for it. (Without a parent window the plugin falls back
+to a system `CFUserNotification` alert, which on device never came to the
+front.) **Quit** confirms and exits; **Cancel** keeps the app running and
+forgets the unanswered request, so a later ⌘Q goes to the frontend's guard
+again with a fresh 2 s timeout. So ⌘Q is never dead, even with a hung or
 crashed webview.
 
 The frontend never drops a quit request either: while a lifecycle
@@ -80,6 +95,12 @@ operation that never finishes therefore ends in the native prompt after
 
 The predefined macOS Quit item sends `terminate:`, which bypasses this
 handshake, so it is replaced by a custom item with ⌘Q.
+
+WKWebView offers ⌘-key equivalents to the page before the menu, and only
+hands them back once its web content process answers, so with a hung web
+content process ⌘Q would never reach the Quit item. On macOS an AppKit
+local key-down monitor therefore sends ⌘Q straight to the same guarded
+path as the Quit item, before any window sees it.
 
 ### Not guarded: Dock ▸ Quit, logout, restart, shutdown
 

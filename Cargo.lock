@@ -1064,7 +1064,10 @@ dependencies = [
 name = "epubzilla-app"
 version = "0.6.0"
 dependencies = [
+ "block2",
  "epubzilla-core",
+ "objc2",
+ "objc2-app-kit",
  "percent-encoding",
  "serde",
  "serde_json",

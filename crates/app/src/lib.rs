@@ -36,6 +36,8 @@ pub fn run() {
             app.set_menu(menu)?;
             menu::register_window_menu(&handles)?;
             app.manage(handles);
+            #[cfg(target_os = "macos")]
+            lifecycle::install_quit_key_monitor(app.handle());
             app.manage(Mutex::new(recents) as SharedRecents);
             Ok(())
         })
