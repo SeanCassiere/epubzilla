@@ -23,7 +23,7 @@ export async function onFileDragDrop(
   handler: (event: FileDragEvent) => void,
 ): Promise<() => void> {
   try {
-    return await getCurrentWebview().onDragDropEvent((event) => {
+    const stop = await getCurrentWebview().onDragDropEvent((event) => {
       const payload = event.payload;
       switch (payload.type) {
         case "enter":
@@ -42,6 +42,15 @@ export async function onFileDragDrop(
           break;
       }
     });
+    return () => {
+      // The IPC bridge may already be gone (window teardown / tests);
+      // unlistening is best-effort, sync or async.
+      try {
+        void Promise.resolve(stop() as unknown).catch(() => undefined);
+      } catch {
+        // ignore
+      }
+    };
   } catch {
     return () => undefined;
   }

@@ -18,10 +18,19 @@ import { dispatchShortcut, menuActionFor } from "./shortcuts";
  */
 export async function bridgeMenuEvents(): Promise<() => void> {
   try {
-    return await listen<string>("app-menu", (event) => {
+    const stop = await listen<string>("app-menu", (event) => {
       const action = menuActionFor(event.payload);
       if (action !== null) dispatchShortcut(action, "menu");
     });
+    return () => {
+      // The IPC bridge may already be gone (window teardown / tests);
+      // unlistening is best-effort, sync or async.
+      try {
+        void Promise.resolve(stop() as unknown).catch(() => undefined);
+      } catch {
+        // ignore
+      }
+    };
   } catch {
     return () => undefined;
   }

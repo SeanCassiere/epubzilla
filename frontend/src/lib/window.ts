@@ -29,7 +29,16 @@ export async function onCloseRequested(
   handler: (event: CloseRequest) => void,
 ): Promise<() => void> {
   try {
-    return await getCurrentWindow().onCloseRequested(handler);
+    const stop = await getCurrentWindow().onCloseRequested(handler);
+    return () => {
+      // The IPC bridge may already be gone (window teardown / tests);
+      // unlistening is best-effort, sync or async.
+      try {
+        void Promise.resolve(stop() as unknown).catch(() => undefined);
+      } catch {
+        // ignore
+      }
+    };
   } catch {
     return () => undefined;
   }
