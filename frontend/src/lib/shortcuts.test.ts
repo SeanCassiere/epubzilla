@@ -28,6 +28,7 @@ describe("matchShortcut", () => {
       matchShortcut(combo({ key, metaKey: true, ...extra }));
     expect(meta("n")).toBe("new-book");
     expect(meta("o")).toBe("open-book");
+    expect(meta("w")).toBe("close-book");
     expect(meta("s")).toBe("save");
     expect(meta("e")).toBe("toggle-edit");
     expect(meta("1")).toBe("sidebar-contents");
@@ -88,6 +89,7 @@ describe("menuActionFor", () => {
     const ids: ShortcutAction[] = [
       "new-book",
       "open-book",
+      "close-book",
       "save",
       "save-as",
       "toggle-edit",

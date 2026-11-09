@@ -89,9 +89,9 @@ function mockBackend({ fixtures = [], openError }: BackendOptions): InvokeCall[]
   return calls;
 }
 
-/** Clicks "Open book…" and waits for the book title to appear. */
+/** Clicks "Open Book…" and waits for the book title to appear. */
 async function openViaDialog(title: string): Promise<void> {
-  fireEvent.click(screen.getByRole("button", { name: "Open book…" }));
+  fireEvent.click(screen.getByRole("button", { name: "Open Book…" }));
   await screen.findByText(title);
 }
 
@@ -306,11 +306,15 @@ describe("failure surfaces", () => {
       openError: { kind: "NotAnEpub", message: "missing mimetype entry" },
     });
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "Open book…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Book…" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toBe("NotAnEpub: missing mimetype entry");
-    // Nothing opened: the reader still shows the empty state.
-    screen.getByText("No book open. Use “Open book…” to pick an EPUB.");
+    // Readable sentence naming the file; the raw error stays as Details.
+    expect(
+      alert.querySelector(".error-banner-message")?.textContent,
+    ).toBe("“book-1.epub” isn’t a valid EPUB file.");
+    expect(alert.textContent).toContain("NotAnEpub: missing mimetype entry");
+    // Nothing opened: the reader still shows the welcome state.
+    screen.getByRole("region", { name: "Welcome" });
   });
 });

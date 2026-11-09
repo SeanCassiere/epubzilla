@@ -4,6 +4,7 @@
 
 import { useState, type FormEvent } from "react";
 import type { Metadata } from "@bindings/Metadata";
+import type { LifecycleNotice } from "../lib/lifecycle";
 
 interface MetadataFormProps {
   /**
@@ -17,6 +18,12 @@ interface MetadataFormProps {
   submitLabel: string;
   onSubmit: (metadata: Metadata) => void;
   onCancel: () => void;
+  /** A submission is in flight: the submit button is disabled (no double submit). */
+  submitting?: boolean;
+  /** Failure of the last submission, shown inside the form (input kept). */
+  error?: LifecycleNotice | null;
+  /** Short explanation shown above the actions. */
+  note?: string;
 }
 
 /** Trimmed value, or null when empty (optional dc: fields). */
@@ -30,6 +37,9 @@ export function MetadataForm({
   submitLabel,
   onSubmit,
   onCancel,
+  submitting = false,
+  error = null,
+  note,
 }: MetadataFormProps) {
   const [title, setTitle] = useState(initial?.title ?? "");
   // Always at least one author row so the list is editable from the start.
@@ -52,6 +62,7 @@ export function MetadataForm({
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
+    if (submitting) return;
     const trimmedTitle = title.trim();
     if (trimmedTitle === "") {
       setTitleError(true);
@@ -164,11 +175,21 @@ export function MetadataForm({
         </label>
       </details>
 
+      {note !== undefined && <p className="metadata-form-note">{note}</p>}
+      {error !== null && (
+        <div className="form-error" role="alert">
+          <p className="form-error-message">{error.message}</p>
+          {error.details !== null && (
+            <p className="form-error-details">{error.details}</p>
+          )}
+        </div>
+      )}
+
       <div className="metadata-form-actions">
-        <button type="button" onClick={onCancel}>
+        <button type="button" data-variant="secondary" onClick={onCancel}>
           Cancel
         </button>
-        <button type="submit" data-variant="primary">
+        <button type="submit" data-variant="primary" disabled={submitting}>
           {submitLabel}
         </button>
       </div>

@@ -44,6 +44,19 @@ export function destroyWindow(): Promise<void> {
 }
 
 /**
+ * Set the native window title (Mission Control, Window menu, VoiceOver —
+ * the overlay titlebar hides it in the window itself). Best-effort:
+ * outside a real Tauri window this is a no-op.
+ */
+export async function setWindowTitle(title: string): Promise<void> {
+  try {
+    await getCurrentWindow().setTitle(title);
+  } catch {
+    // Tests / plain browser: no native window.
+  }
+}
+
+/**
  * Elements that must never start a window drag: interactive controls, and
  * anything inside a modal (the metadata/unsaved-changes dialogs render
  * inside the header element, so their padding would otherwise drag the

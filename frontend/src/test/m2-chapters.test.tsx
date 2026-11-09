@@ -171,9 +171,9 @@ function mockBackend(fixtures: Fixture[]): InvokeCall[] {
   return calls;
 }
 
-/** Clicks "Open book…" and waits for the book title to appear. */
+/** Clicks "Open Book…" and waits for the book title to appear. */
 async function openViaDialog(title: string): Promise<void> {
-  fireEvent.click(screen.getByRole("button", { name: "Open book…" }));
+  fireEvent.click(screen.getByRole("button", { name: "Open Book…" }));
   await screen.findByText(title);
 }
 

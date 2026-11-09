@@ -82,7 +82,7 @@ function chapterSrcdoc(): string {
 /** Open the epub3 fixture and settle on its first chapter. */
 async function openBook(): Promise<void> {
   render(<App />);
-  fireEvent.click(screen.getByRole("button", { name: "Open book…" }));
+  fireEvent.click(screen.getByRole("button", { name: "Open Book…" }));
   await flush();
   screen.getByText("chapter 1 of 3");
 }

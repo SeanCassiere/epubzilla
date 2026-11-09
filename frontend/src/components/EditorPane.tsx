@@ -65,6 +65,7 @@ export function EditorPane() {
     setEditorBuffer,
     addResource,
     addResourceBytes,
+    notifyEditorModified,
   } = useReader();
   const resourceId = book?.spine[spineIndex]?.resource ?? null;
   const bookId = book?.id ?? null;
@@ -112,6 +113,14 @@ export function EditorPane() {
   const modified = buffer !== null && buffer !== baseline;
   const modifiedRef = useRef(modified);
   modifiedRef.current = modified;
+
+  // Unsaved indicator (lifecycle SHOULD-20): report only the modified
+  // FLAG to the reader so the header can show unapplied edits as unsaved
+  // without the buffer text ever leaving this component.
+  useEffect(() => {
+    notifyEditorModified(modified);
+  }, [modified, notifyEditorModified]);
+  useEffect(() => () => notifyEditorModified(false), [notifyEditorModified]);
 
   // Load the chapter buffer, preferring Markdown (format tells us what we got).
   useEffect(() => {

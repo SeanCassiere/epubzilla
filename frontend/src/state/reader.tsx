@@ -18,8 +18,16 @@ import type { ChapterContent } from "@bindings/ChapterContent";
 import type { Metadata } from "@bindings/Metadata";
 import type { ValidationIssue } from "@bindings/ValidationIssue";
 import * as api from "../lib/api";
+import { rawError } from "../lib/lifecycle";
 
 export type ReaderStatus = "idle" | "opening" | "loading-chapter" | "ready";
+
+/**
+ * Outcome of a lifecycle command (open/create/save). Failures are returned
+ * rather than stored in `error` so the lifecycle controller can phrase
+ * them with the file name (lib/lifecycle.ts describe*Error).
+ */
+export type CommandResult = { ok: true; book: Book } | { ok: false; error: unknown };
 
 interface ReaderState {
   book: Book | null;
@@ -34,13 +42,25 @@ interface ReaderState {
   fragment: string | null;
   /** CoreError from the last failed command (render via describeError). */
   error: unknown;
-  openBook: (path: string) => Promise<void>;
+  /** Dismiss `error` (the error banner's Dismiss button). */
+  clearError: () => void;
+  /**
+   * open_book, then adopt. The current book — model, chapter, edit mode,
+   * editor buffer — stays untouched until the replacement was acquired, so
+   * a failed open loses nothing. Not guarded: callers go through the
+   * lifecycle controller (state/lifecycle.tsx).
+   */
+  openBook: (path: string) => Promise<CommandResult>;
   /**
    * create_book: the new Book slots in exactly like an opened one (title
-   * page renders, nav shows). Resolves true on success so callers (the
-   * new-book dialog) know whether to close.
+   * page renders, nav shows). Same preservation rules as openBook.
    */
-  createBook: (metadata: Metadata) => Promise<boolean>;
+  createBook: (metadata: Metadata) => Promise<CommandResult>;
+  /**
+   * Close Book: release the core session and reset every per-book piece
+   * of state (back to the welcome state). Not guarded — see openBook.
+   */
+  closeBook: () => Promise<void>;
   /**
    * update_metadata on the open book; the returned Book replaces state
    * (position and current chapter are kept — only the model changed).
@@ -67,7 +87,7 @@ interface ReaderState {
    * returned Book (dirty cleared, source set) — position and current
    * chapter are kept, only the model changed.
    */
-  saveBook: (path?: string) => Promise<boolean>;
+  saveBook: (path?: string) => Promise<CommandResult>;
   goTo: (spineIndex: number) => Promise<void>;
   /** Navigate by zip-internal resource path (TOC entries, chapter links). */
   goToResource: (path: string, fragment: string | null) => Promise<void>;
@@ -85,7 +105,7 @@ interface ReaderState {
    * before any chapter-leaving navigation (goTo/goToResource/next/prev and
    * leaving edit mode via requestStopEditing). Resolve false to cancel. One
    * guard at a time; pass null to unregister. Open/new/window-close go
-   * through the Header's unified unsaved-changes guard instead (M3.3), which
+   * through the lifecycle controller's unsaved-changes guard instead (M3.3), which
    * consults the editor buffer via the handle below — never both.
    */
   setNavGuard: (guard: (() => Promise<boolean>) | null) => void;
@@ -99,6 +119,13 @@ interface ReaderState {
   setEditorBuffer: (handle: EditorBufferHandle | null) => void;
   /** Whether a registered editor buffer has unapplied changes right now. */
   editorBufferModified: () => boolean;
+  /**
+   * Reactive mirror of editorBufferModified for display (unsaved
+   * indicator): the editor reports flips via notifyEditorModified, never
+   * its text.
+   */
+  editorDirty: boolean;
+  notifyEditorModified: (modified: boolean) => void;
   /**
    * Apply the registered editor buffer if it has unapplied changes.
    * Resolves true when there was nothing to apply or the apply succeeded.
@@ -170,6 +197,18 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
   const [editing, setEditing] = useState(false);
   const [validation, setValidation] = useState<ValidationIssue[] | null>(null);
   const [validating, setValidating] = useState(false);
+  const [editorDirty, setEditorDirty] = useState(false);
+
+  // Session generation: bumped whenever the open book is replaced or
+  // closed. Async chapter reads and validation runs capture it and drop
+  // their result if it changed meanwhile, so a late answer about the
+  // previous book can never land on the new one.
+  const generationRef = useRef(0);
+
+  const clearError = useCallback(() => setError(null), []);
+  const notifyEditorModified = useCallback((modified: boolean) => {
+    setEditorDirty(modified);
+  }, []);
 
   // Editor veto for chapter-leaving navigation (see setNavGuard docs).
   const navGuardRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -184,7 +223,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
     return guard === null ? true : guard();
   }, []);
 
-  // Editor buffer handle (M3.3): consulted by the Header's unified save
+  // Editor buffer handle (M3.3): consulted by the lifecycle controller's save
   // flow and unsaved-changes guard; see setEditorBuffer docs.
   const editorBufferRef = useRef<EditorBufferHandle | null>(null);
   const setEditorBuffer = useCallback(
@@ -207,6 +246,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
     async (target: Book, index: number, targetFragment: string | null = null) => {
       const item = target.spine[index];
       if (item === undefined) return;
+      const generation = generationRef.current;
       setStatus("loading-chapter");
       setError(null);
       try {
@@ -215,11 +255,13 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
           item.resource,
           "Xhtml",
         );
+        if (generation !== generationRef.current) return;
         setChapter(content);
         setSpineIndex(index);
         setFragment(targetFragment);
         setStatus("ready");
       } catch (err) {
+        if (generation !== generationRef.current) return;
         setError(err);
         setStatus("ready");
       }
@@ -233,15 +275,18 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
    * any previous findings.
    */
   const refreshValidation = useCallback(async (bookId: string) => {
+    const generation = generationRef.current;
     setValidating(true);
     try {
       const issues = await api.validateBook(bookId);
-      setValidation(issues);
+      if (generation === generationRef.current) setValidation(issues);
     } catch (err) {
-      setError(err);
-      setValidation(null);
+      if (generation === generationRef.current) {
+        setError(err);
+        setValidation(null);
+      }
     } finally {
-      setValidating(false);
+      if (generation === generationRef.current) setValidating(false);
     }
   }, []);
 
@@ -253,47 +298,51 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
   /**
    * Make `next` the open book (from open_book OR create_book — both return
    * a full Book that slots in identically) and load its first linear
-   * chapter. Resolves true on success.
+   * chapter.
+   *
+   * Nothing about the current book changes until `acquire` succeeds: edit
+   * mode, the editor (and its unapplied buffer), chapter and position all
+   * stay as they were, so a rejected open can be retried with no loss.
+   * Only after adoption is the previous core session released.
    */
   const adoptBook = useCallback(
-    async (acquire: () => Promise<Book>): Promise<boolean> => {
-      // No guard here (M3.3): the Header's unified unsaved-changes dialog
-      // covers open/new/window-close for BOTH the book and the editor
-      // buffer, so consulting the editor's navGuard too would double-prompt.
-      setEditing(false);
+    async (acquire: () => Promise<Book>): Promise<CommandResult> => {
+      const previous = book;
       setStatus("opening");
-      setError(null);
+      let next: Book;
       try {
-        const previous = book;
-        const next = await acquire();
-        setBook(next);
-        setChapter(null);
-        setValidation(null);
-        if (previous !== null && previous.id !== next.id) {
-          // Best-effort session cleanup; ignore failures.
-          api.closeBook(previous.id).catch(() => undefined);
-        }
-        const first = findLinear(next, 0, 1);
-        if (first === -1) {
-          setSpineIndex(-1);
-          setStatus("ready");
-        } else {
-          await loadChapter(next, first);
-        }
-        return true;
+        next = await acquire();
       } catch (err) {
-        setError(err);
-        setStatus(book === null ? "idle" : "ready");
-        return false;
+        setStatus(previous === null ? "idle" : "ready");
+        return { ok: false, error: err };
       }
+      generationRef.current += 1;
+      setEditing(false);
+      setEditorDirty(false);
+      setError(null);
+      setBook(next);
+      setChapter(null);
+      setFragment(null);
+      setSpineIndex(-1);
+      setValidation(null);
+      setValidating(false);
+      if (previous !== null && previous.id !== next.id) {
+        // Best-effort session cleanup; ignore failures.
+        api.closeBook(previous.id).catch(() => undefined);
+      }
+      const first = findLinear(next, 0, 1);
+      if (first === -1) {
+        setStatus("ready");
+      } else {
+        await loadChapter(next, first);
+      }
+      return { ok: true, book: next };
     },
     [book, loadChapter],
   );
 
   const openBook = useCallback(
-    async (path: string) => {
-      await adoptBook(() => api.openBook(path));
-    },
+    (path: string) => adoptBook(() => api.openBook(path)),
     [adoptBook],
   );
 
@@ -301,6 +350,24 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
     (metadata: Metadata) => adoptBook(() => api.createBook(metadata)),
     [adoptBook],
   );
+
+  const closeBook = useCallback(async () => {
+    const previous = book;
+    generationRef.current += 1;
+    setEditing(false);
+    setEditorDirty(false);
+    setBook(null);
+    setChapter(null);
+    setFragment(null);
+    setSpineIndex(-1);
+    setValidation(null);
+    setValidating(false);
+    setError(null);
+    setStatus("idle");
+    if (previous !== null) {
+      await api.closeBook(previous.id).catch(() => undefined);
+    }
+  }, [book]);
 
   const updateMetadata = useCallback(
     async (metadata: Metadata): Promise<boolean> => {
@@ -416,8 +483,8 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
   );
 
   const saveBook = useCallback(
-    async (path?: string): Promise<boolean> => {
-      if (book === null) return false;
+    async (path?: string): Promise<CommandResult> => {
+      if (book === null) return { ok: false, error: new Error("No book is open.") };
       setError(null);
       try {
         const saved = await api.saveBook(book.id, path);
@@ -428,10 +495,9 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
         // reflects what was just written. Fire-and-forget: findings (or a
         // rejection, via `error`) land when they land — save stays snappy.
         void refreshValidation(saved.id);
-        return true;
+        return { ok: true, book: saved };
       } catch (err) {
-        setError(err);
-        return false;
+        return { ok: false, error: err };
       }
     },
     [book, refreshValidation],
@@ -554,8 +620,10 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       fragment,
       status,
       error,
+      clearError,
       openBook,
       createBook,
+      closeBook,
       updateMetadata,
       addChapter,
       removeChapter,
@@ -573,6 +641,8 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       requestStopEditing,
       setEditorBuffer,
       editorBufferModified,
+      editorDirty,
+      notifyEditorModified,
       applyEditorBuffer,
       addResource,
       addResourceBytes,
@@ -589,8 +659,10 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       fragment,
       status,
       error,
+      clearError,
       openBook,
       createBook,
+      closeBook,
       updateMetadata,
       addChapter,
       removeChapter,
@@ -608,6 +680,8 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       requestStopEditing,
       setEditorBuffer,
       editorBufferModified,
+      editorDirty,
+      notifyEditorModified,
       applyEditorBuffer,
       addResource,
       addResourceBytes,
@@ -632,19 +706,7 @@ export function useReader(): ReaderState {
   return ctx;
 }
 
-/** Human-readable form of a command rejection (CoreError or unknown). */
+/** Raw `Kind: message` form of a command rejection (CoreError or unknown). */
 export function describeError(error: unknown): string {
-  if (api.isCoreError(error)) {
-    switch (error.kind) {
-      case "ResourceNotFound":
-        return `${error.kind}: ${error.id}`;
-      case "ValidationFailed":
-        return `${error.kind}: ${error.issues.length} issue(s)`;
-      case "ConversionLossy":
-        return `${error.kind}: ${error.detail}`;
-      default:
-        return `${error.kind}: ${error.message}`;
-    }
-  }
-  return error instanceof Error ? error.message : String(error);
+  return rawError(error);
 }

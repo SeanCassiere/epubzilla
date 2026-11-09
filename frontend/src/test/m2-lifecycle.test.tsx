@@ -224,8 +224,8 @@ describe("M2 acceptance flow (create → add chapters → reorder → save)", ()
     render(<App />);
 
     // Create a new book through the wizard.
-    fireEvent.click(screen.getByRole("button", { name: "New book…" }));
-    const wizard = screen.getByRole("dialog", { name: "New book" });
+    fireEvent.click(screen.getByRole("button", { name: "New Book…" }));
+    const wizard = screen.getByRole("dialog", { name: "New Book" });
     fireEvent.change(within(wizard).getByLabelText("Title"), {
       target: { value: "Nova História — 物語" },
     });
