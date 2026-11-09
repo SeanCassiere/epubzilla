@@ -331,6 +331,20 @@ export function Header() {
           <div className="modal-actions">
             <button
               type="button"
+              data-variant="destructive"
+              onClick={() => {
+                setPendingAction(null);
+                pendingAction();
+              }}
+            >
+              Discard
+            </button>
+            <button type="button" onClick={() => setPendingAction(null)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              data-variant="primary"
               onClick={() => {
                 // Save all: apply the editor buffer (if any), then save the
                 // book (incl. save-as when source is null), then proceed.
@@ -342,18 +356,6 @@ export function Header() {
               }}
             >
               Save all
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setPendingAction(null);
-                pendingAction();
-              }}
-            >
-              Discard
-            </button>
-            <button type="button" onClick={() => setPendingAction(null)}>
-              Cancel
             </button>
           </div>
         </ModalDialog>
