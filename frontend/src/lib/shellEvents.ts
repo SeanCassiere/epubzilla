@@ -17,7 +17,16 @@ async function subscribe<T>(
   handler: (payload: T) => void,
 ): Promise<() => void> {
   try {
-    return await listen<T>(event, (e) => handler(e.payload));
+    const stop = await listen<T>(event, (e) => handler(e.payload));
+    return () => {
+      // The IPC bridge may already be gone (window teardown / tests);
+      // unlistening is best-effort, sync or async.
+      try {
+        void Promise.resolve(stop() as unknown).catch(() => undefined);
+      } catch {
+        // ignore
+      }
+    };
   } catch {
     return () => undefined;
   }
