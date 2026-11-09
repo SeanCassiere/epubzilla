@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ContentFormat } from "@bindings/ContentFormat";
 import { useReader, describeError } from "../state/reader";
+import { Modal } from "./Modal";
 import * as api from "../lib/api";
 import {
   imageMarkdown,
@@ -361,35 +362,32 @@ export function EditorPane() {
       )}
       {dialog}
       {pendingLeave !== null && (
-        <div className="modal-overlay">
-          <div className="modal" role="dialog" aria-label="Unapplied changes">
-            <h2 className="modal-title">Unapplied changes</h2>
-            <p>This chapter has changes that haven’t been applied.</p>
-            <div className="modal-actions">
-              <button
-                type="button"
-                data-variant="destructive"
-                onClick={() => resolveLeave(true)}
-              >
-                Discard changes
-              </button>
-              <button type="button" onClick={() => resolveLeave(false)}>
-                Keep editing
-              </button>
-              <button
-                type="button"
-                data-variant="primary"
-                data-autofocus
-                disabled={applying}
-                onClick={() => {
-                  void apply().then((ok) => resolveLeave(ok));
-                }}
-              >
-                Apply &amp; continue
-              </button>
-            </div>
+        <Modal title="Unapplied changes" onCancel={() => resolveLeave(false)}>
+          <p>This chapter has changes that haven’t been applied.</p>
+          <div className="modal-actions">
+            <button
+              type="button"
+              data-variant="destructive"
+              onClick={() => resolveLeave(true)}
+            >
+              Discard changes
+            </button>
+            <button type="button" onClick={() => resolveLeave(false)}>
+              Keep editing
+            </button>
+            <button
+              type="button"
+              data-variant="primary"
+              data-autofocus
+              disabled={applying}
+              onClick={() => {
+                void apply().then((ok) => resolveLeave(ok));
+              }}
+            >
+              Apply &amp; continue
+            </button>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );
