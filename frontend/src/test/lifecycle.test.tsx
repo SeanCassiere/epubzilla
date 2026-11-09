@@ -1129,8 +1129,16 @@ describe("drop overlay", () => {
         position: POSITION,
       }),
     );
+    // Each image asks for alt text; leave both empty (decorative).
+    for (let i = 0; i < 2; i++) {
+      const alt = await screen.findByRole("textbox", { name: /Alt text/ });
+      fireEvent.keyDown(alt, { key: "Enter" });
+      await waitFor(() =>
+        expect(count(backend, "add_resource_from_path")).toBe(i + 1),
+      );
+    }
     await waitFor(() =>
-      expect(buffer.value).toContain("![](../images/Foto Café.JPG)"),
+      expect(buffer.value).toContain("![](<../images/Foto Café.JPG>)"),
     );
     expect(buffer.value).toContain("![](../images/pic.png)");
     expect(
