@@ -11,6 +11,10 @@
 //! Book (⌘W), a custom Quit item (the predefined one sends `terminate:`,
 //! which exits without giving the unsaved-changes guard a chance), and
 //! per-state enablement driven by the frontend via `set_menu_state`.
+//!
+//! On macOS a standard Window menu (Minimize, Zoom, Bring All to Front) is
+//! registered as the app's windows menu, so AppKit lists the open window by
+//! its title there.
 
 use std::collections::HashMap;
 
@@ -32,6 +36,10 @@ pub const QUIT_ID: &str = "quit";
 pub struct MenuHandles<R: Runtime> {
     pub open_recent: Submenu<R>,
     pub items: HashMap<&'static str, MenuItem<R>>,
+    /// The Window menu, registered with AppKit once the menu is installed
+    /// (`register_window_menu`).
+    #[cfg(target_os = "macos")]
+    pub window: Submenu<R>,
 }
 
 /// Document state the frontend reports (`set_menu_state`).
@@ -246,6 +254,30 @@ fn view_submenu<R: Runtime>(
         .build()
 }
 
+/// Standard macOS Window menu from predefined items (Minimize ⌘M, Zoom,
+/// Bring All to Front). AppKit appends the window list once it is the app's
+/// windows menu.
+#[cfg(target_os = "macos")]
+fn window_submenu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
+    SubmenuBuilder::new(app, "Window")
+        .minimize()
+        .maximize()
+        .separator()
+        .bring_all_to_front()
+        .build()
+}
+
+/// Make the Window menu AppKit's windows menu (`NSApp.windowsMenu`), which
+/// lists the open windows by title. Call after the menu was installed as
+/// the app menu; no-op elsewhere.
+pub fn register_window_menu<R: Runtime>(handles: &MenuHandles<R>) -> tauri::Result<()> {
+    #[cfg(target_os = "macos")]
+    handles.window.set_as_windows_menu_for_nsapp()?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = handles;
+    Ok(())
+}
+
 /// Build the full application menu, plus the handles needed to update it.
 pub fn build<R: Runtime>(
     app: &AppHandle<R>,
@@ -259,7 +291,16 @@ pub fn build<R: Runtime>(
     menu.append(&file)?;
     menu.append(&edit_submenu(app)?)?;
     menu.append(&view_submenu(app, &mut items)?)?;
-    let handles = MenuHandles { open_recent, items };
+    #[cfg(target_os = "macos")]
+    let window = window_submenu(app)?;
+    #[cfg(target_os = "macos")]
+    menu.append(&window)?;
+    let handles = MenuHandles {
+        open_recent,
+        items,
+        #[cfg(target_os = "macos")]
+        window,
+    };
     // Launch state: welcome, nothing open.
     apply_state(&handles, MenuState::default())?;
     Ok((menu, handles))
