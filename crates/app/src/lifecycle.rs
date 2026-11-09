@@ -270,9 +270,22 @@ impl LifecycleState {
     }
 
     /// Claim the native prompt; false when it is already on screen.
+    #[cfg(test)]
     pub fn begin_native_prompt(&self) -> bool {
+        self.begin_native_prompt_for(None)
+    }
+
+    /// Claim the native prompt for an overdue `request`. Revalidated under
+    /// the same lock that claims the prompt: the timer checks the request
+    /// before asking AppKit about pickers (a main-thread round trip), and an
+    /// acknowledgement landing in between must not still put "isn't
+    /// responding" in front of a working app.
+    pub fn begin_native_prompt_for(&self, request: Option<u64>) -> bool {
         let mut tracker = self.tracker();
         if tracker.prompt_open {
+            return false;
+        }
+        if request.is_some_and(|request| tracker.unacknowledged != Some(request)) {
             return false;
         }
         tracker.prompt_open = true;
@@ -368,7 +381,7 @@ pub fn handle_exit_request<R: Runtime>(
         ExitAction::Allow => {}
         ExitAction::AskNative => {
             prevent_exit();
-            prompt_quit_anyway(app);
+            prompt_quit_anyway(app, None);
         }
         ExitAction::Hold => {
             prevent_exit();
@@ -398,7 +411,7 @@ fn watch_quit_ack<R: Runtime>(app: &AppHandle<R>, request: u64) {
             return;
         }
         if !native_modal_open(app) {
-            prompt_quit_anyway(app);
+            prompt_quit_anyway(app, Some(request));
             return;
         }
         state.suspend_ack_timeout(request);
@@ -450,15 +463,19 @@ fn native_modal_open<R: Runtime>(_app: &AppHandle<R>) -> bool {
 }
 
 /// Native last resort when the webview cannot answer: Quit / Cancel. At
-/// most one prompt is on screen at a time.
+/// most one prompt is on screen at a time. From the timer, `request` is the
+/// overdue request; the prompt is skipped if it was answered meanwhile.
 ///
 /// It is an `NSAlert` sheet on the main window, brought forward and
 /// focused first, shown through the dialog plugin's non-blocking API, so
 /// the run loop never waits on it. Without a parent window, rfd falls back
 /// to `CFUserNotificationDisplayAlert`, a system alert owned by another
 /// process that can end up behind other windows or never show at all.
-fn prompt_quit_anyway<R: Runtime>(app: &AppHandle<R>) {
-    if !app.state::<LifecycleState>().begin_native_prompt() {
+fn prompt_quit_anyway<R: Runtime>(app: &AppHandle<R>, request: Option<u64>) {
+    if !app
+        .state::<LifecycleState>()
+        .begin_native_prompt_for(request)
+    {
         return;
     }
     reveal_main_window(app);
@@ -507,12 +524,19 @@ pub fn install_quit_key_monitor<R: Runtime>(app: &AppHandle<R>) {
                 | NSEventModifierFlags::Shift
                 | NSEventModifierFlags::Option
                 | NSEventModifierFlags::Control);
+        // The Q key by position (kVK_ANSI_Q) as well as by character, so
+        // non-Latin layouts are covered too.
+        const KEY_Q: u16 = 12;
         let is_quit = modifiers == NSEventModifierFlags::Command
-            && key
-                .charactersIgnoringModifiers()
-                .is_some_and(|chars| chars.to_string().eq_ignore_ascii_case("q"));
+            && (key.keyCode() == KEY_Q
+                || key
+                    .charactersIgnoringModifiers()
+                    .is_some_and(|chars| chars.to_string().eq_ignore_ascii_case("q")));
         if is_quit {
-            app.exit(0);
+            // Holding ⌘Q auto-repeats; one quit request per press.
+            if !key.isARepeat() {
+                app.exit(0);
+            }
             ptr::null_mut()
         } else {
             event.as_ptr()
@@ -846,6 +870,21 @@ mod tests {
         assert!(state.begin_native_prompt());
         state.end_native_prompt(true);
         assert_eq!(quit(&state, t0, false), ExitAction::Allow);
+    }
+
+    #[test]
+    fn an_acknowledged_request_cannot_claim_the_native_prompt() {
+        let state = LifecycleState::default();
+        state.take_pending();
+        let start = Instant::now();
+        let ExitAction::AskFrontend { request } = quit(&state, start, true) else {
+            panic!("expected the frontend to be asked");
+        };
+        // The ack lands while the timer is asking AppKit about pickers.
+        state.acknowledge(request);
+        assert!(!state.begin_native_prompt_for(Some(request)));
+        // Still free for a genuine prompt afterwards.
+        assert!(state.begin_native_prompt());
     }
 
     #[test]
