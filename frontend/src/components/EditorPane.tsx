@@ -370,6 +370,7 @@ export function EditorPane() {
               <button
                 type="button"
                 data-variant="primary"
+                data-autofocus
                 disabled={applying}
                 onClick={() => {
                   void apply().then((ok) => resolveLeave(ok));
