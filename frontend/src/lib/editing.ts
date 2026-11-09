@@ -63,3 +63,20 @@ export function imageMarkdown(relativePath: string, alt = ""): string {
   const destination = /[\s()<>]/.test(relativePath) ? `<${path}>` : path;
   return `![${label}](${destination})`;
 }
+
+/**
+ * Image file extensions the editor inserts (picker filter and Finder
+ * drops). Must stay in sync with the backend's media-type inference
+ * (crates/app/src/commands.rs).
+ */
+export const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "svg", "webp"] as const;
+
+/** Whether an OS path names an image the editor can insert. */
+export function isImagePath(path: string): boolean {
+  const dot = path.lastIndexOf(".");
+  if (dot === -1 || dot < Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"))) {
+    return false;
+  }
+  const ext = path.slice(dot + 1).toLowerCase();
+  return (IMAGE_EXTENSIONS as readonly string[]).includes(ext);
+}

@@ -19,6 +19,7 @@ import type { Metadata } from "@bindings/Metadata";
 import type { ValidationIssue } from "@bindings/ValidationIssue";
 import * as api from "../lib/api";
 import { rawError } from "../lib/lifecycle";
+import { anyModalOpen } from "../lib/modalStack";
 
 export type ReaderStatus = "idle" | "opening" | "loading-chapter" | "ready";
 
@@ -27,7 +28,19 @@ export type ReaderStatus = "idle" | "opening" | "loading-chapter" | "ready";
  * rather than stored in `error` so the lifecycle controller can phrase
  * them with the file name (lib/lifecycle.ts describe*Error).
  */
-export type CommandResult = { ok: true; book: Book } | { ok: false; error: unknown };
+export type CommandResult =
+  | { ok: true; book: Book }
+  | { ok: false; error: unknown; cancelled?: boolean };
+
+/**
+ * Options for openBook / createBook. `confirm` runs after the replacement
+ * was acquired but BEFORE anything about the current book changes (or its
+ * session is released): resolve false to back out — the acquired book is
+ * released and the result is `{ ok: false, cancelled: true }`.
+ */
+export interface AdoptOptions {
+  confirm?: () => Promise<boolean>;
+}
 
 interface ReaderState {
   book: Book | null;
@@ -50,12 +63,44 @@ interface ReaderState {
    * a failed open loses nothing. Not guarded: callers go through the
    * lifecycle controller (state/lifecycle.tsx).
    */
-  openBook: (path: string) => Promise<CommandResult>;
+  openBook: (path: string, options?: AdoptOptions) => Promise<CommandResult>;
   /**
    * create_book: the new Book slots in exactly like an opened one (title
    * page renders, nav shows). Same preservation rules as openBook.
    */
-  createBook: (metadata: Metadata) => Promise<CommandResult>;
+  createBook: (
+    metadata: Metadata,
+    options?: AdoptOptions,
+  ) => Promise<CommandResult>;
+  /**
+   * Id of the open book when it was made by createBook (set in the same
+   * render that adopts it, so the sidebar mounts on Chapters); else null.
+   */
+  createdBookId: string | null;
+  /**
+   * Lifecycle freeze (state/lifecycle.tsx): while a lifecycle operation is
+   * pending, user-facing mutations and navigation are refused and the
+   * editor is read-only, so nothing changes behind the guard's decision.
+   * writeChapter stays available — the controller's save applies the
+   * editor buffer through it.
+   */
+  frozen: boolean;
+  setFrozen: (frozen: boolean) => void;
+  /** Resolves once every mutation already in flight has settled. */
+  settle: () => Promise<void>;
+  /**
+   * Monotonic document revision: changes whenever a mutation starts or the
+   * editor buffer changes. The controller compares it across a guard
+   * decision / save to catch edits that slipped in meanwhile.
+   */
+  revision: () => number;
+  /**
+   * Insert image files (OS paths) into the chapter being edited, via the
+   * same add-resource-and-reference path as the toolbar's Insert image…
+   * (Finder drops, which the native webview intercepts). No-op when the
+   * editor can't take them.
+   */
+  insertEditorImages: (paths: string[]) => Promise<void>;
   /**
    * Close Book: release the core session and reset every per-book piece
    * of state (back to the welcome state). Not guarded — see openBook.
@@ -175,6 +220,10 @@ export interface EditorBufferHandle {
   modified: () => boolean;
   /** write_chapter the buffer; resolves true on success. */
   apply: () => Promise<boolean>;
+  /** Counts buffer changes (see ReaderState.revision). */
+  revision: () => number;
+  /** Insert images from OS paths at the cursor (see insertEditorImages). */
+  insertImages: (paths: string[]) => Promise<void>;
 }
 
 const ReaderContext = createContext<ReaderState | null>(null);
@@ -198,6 +247,36 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
   const [validation, setValidation] = useState<ValidationIssue[] | null>(null);
   const [validating, setValidating] = useState(false);
   const [editorDirty, setEditorDirty] = useState(false);
+  const [createdBookId, setCreatedBookId] = useState<string | null>(null);
+
+  // Lifecycle freeze (see ReaderState.frozen). The ref answers synchronously
+  // for handlers that run before the next render.
+  const frozenRef = useRef(false);
+  const [frozen, setFrozenState] = useState(false);
+  const setFrozen = useCallback((next: boolean) => {
+    frozenRef.current = next;
+    setFrozenState(next);
+  }, []);
+  /** Chapter navigation is refused while frozen or behind any modal. */
+  const navBlocked = () => frozenRef.current || anyModalOpen();
+
+  // Mutations in flight and the document revision (see settle / revision).
+  const inFlightRef = useRef(new Set<Promise<unknown>>());
+  const mutationRevisionRef = useRef(0);
+  const track = useCallback(<T,>(work: Promise<T>): Promise<T> => {
+    mutationRevisionRef.current += 1;
+    const set = inFlightRef.current;
+    set.add(work);
+    const done = () => {
+      set.delete(work);
+    };
+    work.then(done, done);
+    return work;
+  }, []);
+  const settle = useCallback(async () => {
+    const set = inFlightRef.current;
+    while (set.size > 0) await Promise.allSettled([...set]);
+  }, []);
 
   // Session generation: bumped whenever the open book is replaced or
   // closed. Async chapter reads and validation runs capture it and drop
@@ -240,6 +319,16 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
     const handle = editorBufferRef.current;
     if (handle === null || !handle.modified()) return true;
     return handle.apply();
+  }, []);
+  const revision = useCallback(
+    (): number =>
+      mutationRevisionRef.current + (editorBufferRef.current?.revision() ?? 0),
+    [],
+  );
+  const insertEditorImages = useCallback(async (paths: string[]) => {
+    const handle = editorBufferRef.current;
+    if (handle === null || frozenRef.current) return;
+    await handle.insertImages(paths);
   }, []);
 
   const loadChapter = useCallback(
@@ -306,7 +395,11 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
    * Only after adoption is the previous core session released.
    */
   const adoptBook = useCallback(
-    async (acquire: () => Promise<Book>): Promise<CommandResult> => {
+    async (
+      acquire: () => Promise<Book>,
+      created: boolean,
+      options: AdoptOptions = {},
+    ): Promise<CommandResult> => {
       const previous = book;
       setStatus("opening");
       let next: Book;
@@ -316,7 +409,14 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
         setStatus(previous === null ? "idle" : "ready");
         return { ok: false, error: err };
       }
+      if (options.confirm !== undefined && !(await options.confirm())) {
+        // Backed out after acquisition: the current book was never touched.
+        api.closeBook(next.id).catch(() => undefined);
+        setStatus(previous === null ? "idle" : "ready");
+        return { ok: false, error: null, cancelled: true };
+      }
       generationRef.current += 1;
+      setCreatedBookId(created ? next.id : null);
       setEditing(false);
       setEditorDirty(false);
       setError(null);
@@ -342,12 +442,14 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
   );
 
   const openBook = useCallback(
-    (path: string) => adoptBook(() => api.openBook(path)),
+    (path: string, options?: AdoptOptions) =>
+      adoptBook(() => api.openBook(path), false, options),
     [adoptBook],
   );
 
   const createBook = useCallback(
-    (metadata: Metadata) => adoptBook(() => api.createBook(metadata)),
+    (metadata: Metadata, options?: AdoptOptions) =>
+      adoptBook(() => api.createBook(metadata), true, options),
     [adoptBook],
   );
 
@@ -371,10 +473,10 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
 
   const updateMetadata = useCallback(
     async (metadata: Metadata): Promise<boolean> => {
-      if (book === null) return false;
+      if (book === null || frozenRef.current) return false;
       setError(null);
       try {
-        const updated = await api.updateMetadata(book.id, metadata);
+        const updated = await track(api.updateMetadata(book.id, metadata));
         // Same book, same spine position — only the model (and dirty flag,
         // displayed from M2.4) changed.
         setBook(updated);
@@ -385,7 +487,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
         return false;
       }
     },
-    [book],
+    [book, track],
   );
 
   /**
@@ -401,7 +503,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       const currentId = book.spine[spineIndex]?.id ?? null;
       setError(null);
       try {
-        const updated = await mutate();
+        const updated = await track(mutate());
         setBook(updated);
         setValidation(null);
         if (currentId !== null) {
@@ -414,12 +516,12 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
         return null;
       }
     },
-    [book, spineIndex],
+    [book, spineIndex, track],
   );
 
   const addChapter = useCallback(
     async (title: string): Promise<boolean> => {
-      if (book === null) return false;
+      if (book === null || frozenRef.current) return false;
       const after = book.spine[spineIndex]?.id;
       const known = new Set(book.spine.map((s) => s.id));
       const updated = await applyEdit(() =>
@@ -436,7 +538,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
 
   const removeChapter = useCallback(
     async (spineItemId: string): Promise<boolean> => {
-      if (book === null) return false;
+      if (book === null || frozenRef.current) return false;
       const removedIndex = book.spine.findIndex((s) => s.id === spineItemId);
       if (removedIndex === -1) return false;
       const wasCurrent = removedIndex === spineIndex;
@@ -465,7 +567,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
 
   const moveSpineItem = useCallback(
     async (spineItemId: string, direction: 1 | -1): Promise<boolean> => {
-      if (book === null) return false;
+      if (book === null || frozenRef.current) return false;
       const from = book.spine.findIndex((s) => s.id === spineItemId);
       if (from === -1) return false;
       const to = from + direction;
@@ -506,6 +608,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
   const goTo = useCallback(
     async (index: number) => {
       if (book === null || index < 0 || index >= book.spine.length) return;
+      if (navBlocked()) return;
       if (index !== spineIndex && !(await passGuard())) return;
       await loadChapter(book, index);
     },
@@ -514,7 +617,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
 
   const goToResource = useCallback(
     async (path: string, targetFragment: string | null) => {
-      if (book === null) return;
+      if (book === null || navBlocked()) return;
       const resource = book.resources.find((r) => r.path === path);
       if (resource === undefined) return;
       const index = book.spine.findIndex((s) => s.resource === resource.id);
@@ -531,37 +634,40 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
   );
 
   const nextChapter = useCallback(async () => {
-    if (book === null) return;
+    if (book === null || navBlocked()) return;
     const next = findLinear(book, spineIndex + 1, 1);
     if (next !== -1 && (await passGuard())) await loadChapter(book, next);
   }, [book, spineIndex, loadChapter, passGuard]);
 
   const previousChapter = useCallback(async () => {
-    if (book === null) return;
+    if (book === null || navBlocked()) return;
     const prev = findLinear(book, spineIndex - 1, -1);
     if (prev !== -1 && (await passGuard())) await loadChapter(book, prev);
   }, [book, spineIndex, loadChapter, passGuard]);
 
   const startEditing = useCallback(() => {
+    if (navBlocked()) return;
     if (book !== null && book.epub_version === "V3" && spineIndex >= 0) {
       setEditing(true);
     }
   }, [book, spineIndex]);
 
   const stopEditing = useCallback(async () => {
+    if (frozenRef.current) return;
     setEditing(false);
     // Re-read the current chapter: applied writes changed its content.
     if (book !== null && spineIndex >= 0) await loadChapter(book, spineIndex);
   }, [book, spineIndex, loadChapter]);
 
   const requestStopEditing = useCallback(async () => {
+    if (navBlocked()) return;
     if (!(await passGuard())) return;
     await stopEditing();
   }, [passGuard, stopEditing]);
 
   const addResource = useCallback(
     async (osPath: string): Promise<Book | null> => {
-      if (book === null) return null;
+      if (book === null || frozenRef.current) return null;
       return applyEdit(() => api.addResourceFromPath(book.id, osPath));
     },
     [book, applyEdit],
@@ -573,7 +679,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       mediaType: string,
       bytes: Uint8Array,
     ): Promise<Book | null> => {
-      if (book === null) return null;
+      if (book === null || frozenRef.current) return null;
       return applyEdit(() =>
         api.addResourceFromBytes(book.id, nameHint, mediaType, bytes),
       );
@@ -583,7 +689,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
 
   const setCover = useCallback(
     async (resourceId: string | null): Promise<boolean> => {
-      if (book === null) return false;
+      if (book === null || frozenRef.current) return false;
       const updated = await applyEdit(() => api.setCover(book.id, resourceId));
       return updated !== null;
     },
@@ -592,7 +698,7 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
 
   const setCoverFromFile = useCallback(
     async (osPath: string): Promise<boolean> => {
-      if (book === null) return false;
+      if (book === null || frozenRef.current) return false;
       const updated = await applyEdit(() =>
         api.setCoverFromPath(book.id, osPath),
       );
@@ -623,6 +729,12 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       clearError,
       openBook,
       createBook,
+      createdBookId,
+      frozen,
+      setFrozen,
+      settle,
+      revision,
+      insertEditorImages,
       closeBook,
       updateMetadata,
       addChapter,
@@ -662,6 +774,12 @@ export function ReaderProvider({ children }: { children: ReactNode }) {
       clearError,
       openBook,
       createBook,
+      createdBookId,
+      frozen,
+      setFrozen,
+      settle,
+      revision,
+      insertEditorImages,
       closeBook,
       updateMetadata,
       addChapter,

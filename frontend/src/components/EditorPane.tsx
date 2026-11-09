@@ -67,6 +67,7 @@ export function EditorPane() {
     addResource,
     addResourceBytes,
     notifyEditorModified,
+    frozen,
   } = useReader();
   const resourceId = book?.spine[spineIndex]?.resource ?? null;
   const bookId = book?.id ?? null;
@@ -109,6 +110,14 @@ export function EditorPane() {
   const chooseMode = useCallback((mode: MarkdownMode) => {
     setMarkdownMode(mode);
     storeMode(mode);
+  }, []);
+
+  // Buffer revision (ReaderState.revision): bumped on every edit so the
+  // lifecycle controller can tell whether text changed after its snapshot.
+  const revisionRef = useRef(0);
+  const editBuffer = useCallback((next: string) => {
+    revisionRef.current += 1;
+    setBuffer(next);
   }, []);
 
   const modified = buffer !== null && buffer !== baseline;
@@ -181,10 +190,15 @@ export function EditorPane() {
   // stays current for the pane's lifetime.
   const applyRef = useRef(apply);
   applyRef.current = apply;
+  const insertImagesRef = useRef<(paths: string[]) => Promise<void>>(
+    async () => undefined,
+  );
   useEffect(() => {
     setEditorBuffer({
       modified: () => modifiedRef.current,
       apply: () => applyRef.current(),
+      revision: () => revisionRef.current,
+      insertImages: (paths) => insertImagesRef.current(paths),
     });
     return () => setEditorBuffer(null);
   }, [setEditorBuffer]);
@@ -218,29 +232,46 @@ export function EditorPane() {
     [resourceId],
   );
 
+  // Add image files (OS paths) to the book and reference each at the
+  // cursor, in order. Shared by the toolbar's picker and Finder drops
+  // (which the native webview intercepts before the editor's HTML5 drop
+  // handler could see them). Markdown only: XHTML source mode has no
+  // image-reference syntax to insert.
+  const insertImagesFromPaths = useCallback(
+    async (osPaths: string[]) => {
+      if (book === null || resourceId === null || format !== "Markdown") return;
+      let known: ReadonlySet<string> = new Set(book.resources.map((r) => r.id));
+      for (const osPath of osPaths) {
+        const alt = await promptImageAlt();
+        if (alt === null) continue;
+        const updated = await addResource(osPath);
+        if (updated === null) continue;
+        const reference = referenceForAdded(known, updated);
+        known = new Set(updated.resources.map((r) => r.id));
+        if (reference === null) continue;
+        const insert = insertImageRef.current;
+        if (insert !== null) {
+          insert(reference, alt);
+        } else {
+          // Surface not ready: append at the end rather than dropping the ref.
+          revisionRef.current += 1;
+          setBuffer((current) =>
+            current === null
+              ? current
+              : `${current}\n\n${imageMarkdown(reference, alt)}\n`,
+          );
+        }
+      }
+    },
+    [book, resourceId, format, addResource, referenceForAdded, promptImageAlt],
+  );
+
   const handleInsertImage = useCallback(async () => {
     if (book === null || resourceId === null) return;
     const osPath = await pickImageFile();
     if (osPath === null) return;
-    const alt = await promptImageAlt();
-    if (alt === null) return;
-    const known = new Set(book.resources.map((r) => r.id));
-    const updated = await addResource(osPath);
-    if (updated === null) return;
-    const reference = referenceForAdded(known, updated);
-    if (reference === null) return;
-    const insert = insertImageRef.current;
-    if (insert !== null) {
-      insert(reference, alt);
-    } else {
-      // Surface not ready: append at the end rather than dropping the ref.
-      setBuffer((current) =>
-        current === null
-          ? current
-          : `${current}\n\n${imageMarkdown(reference, alt)}\n`,
-      );
-    }
-  }, [book, resourceId, addResource, referenceForAdded, promptImageAlt]);
+    await insertImagesFromPaths([osPath]);
+  }, [book, resourceId, insertImagesFromPaths]);
 
   // Clipboard paste / drag-and-drop images (#54): persist the bytes as a
   // book resource (add_resource_from_bytes) and hand the WYSIWYG surface
@@ -259,13 +290,19 @@ export function EditorPane() {
     [book, resourceId, addResourceBytes, referenceForAdded],
   );
 
+  insertImagesRef.current = insertImagesFromPaths;
+
   if (loadError !== null) {
     return (
       <div className="editor-pane">
         <p className="error" role="alert">
           Could not load chapter for editing: {describeError(loadError)}
         </p>
-        <button type="button" onClick={() => void stopEditing()}>
+        <button
+          type="button"
+          onClick={() => void stopEditing()}
+          disabled={frozen}
+        >
           Back to reading
         </button>
       </div>
@@ -317,6 +354,7 @@ export function EditorPane() {
           <button
             type="button"
             onClick={() => void handleInsertImage()}
+            disabled={frozen}
             title="Add an image to the book and reference it at the cursor"
           >
             Insert image…
@@ -326,7 +364,7 @@ export function EditorPane() {
         <button
           type="button"
           onClick={() => void apply()}
-          disabled={!modified || applying}
+          disabled={!modified || applying || frozen}
           title="Write the buffer into the book (book still needs saving; Ctrl/Cmd+S saves everything)"
         >
           Apply
@@ -334,6 +372,7 @@ export function EditorPane() {
         <button
           type="button"
           onClick={() => void requestStopEditing()}
+          disabled={frozen}
           title="Back to reading (Ctrl/Cmd+E)"
         >
           Done
@@ -346,7 +385,8 @@ export function EditorPane() {
       ) : format === "Markdown" && effectiveMode === "wysiwyg" ? (
         <MilkdownEditor
           value={buffer}
-          onChange={setBuffer}
+          onChange={editBuffer}
+          readOnly={frozen}
           insertImageRef={insertImageRef}
           onInsertImage={() => void handleInsertImage()}
           resolveUrl={resolveEditorUrl}
@@ -356,7 +396,8 @@ export function EditorPane() {
         <CodeEditor
           value={buffer}
           language={format === "Markdown" ? "markdown" : "xml"}
-          onChange={setBuffer}
+          onChange={editBuffer}
+          readOnly={frozen}
           insertImageRef={format === "Markdown" ? insertImageRef : undefined}
         />
       )}

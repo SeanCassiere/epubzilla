@@ -2,6 +2,7 @@
 // may import the dialog plugin — UI components go through these helpers.
 
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { IMAGE_EXTENSIONS } from "./editing";
 
 /** Native open-file dialog filtered to .epub. Resolves null on cancel. */
 export async function pickEpubFile(): Promise<string | null> {
@@ -23,7 +24,7 @@ export async function pickImageFile(): Promise<string | null> {
     multiple: false,
     directory: false,
     filters: [
-      { name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "svg", "webp"] },
+      { name: "Images", extensions: [...IMAGE_EXTENSIONS] },
     ],
   });
 }
