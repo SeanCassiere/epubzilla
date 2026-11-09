@@ -438,3 +438,142 @@ fn build_source_epub(dir: &std::path::Path) -> PathBuf {
     writer.finish().unwrap();
     path
 }
+
+/// Exercise every conversion-standard construct through the actual session
+/// write/save/reopen path. CI's epubcheck job picks up the saved book.
+#[test]
+fn conversion_standard_book_passes_native_validation() {
+    let mut session = Session::new();
+    let book = session.create_book(Metadata {
+        title: "Conversion standard".into(),
+        authors: vec!["Conversion Tester".into()],
+        language: "en".into(),
+        identifier: String::new(),
+        modified: None,
+        description: None,
+        publisher: None,
+        cover_resource: None,
+    });
+    let book_id = book.id.clone();
+    let book = session.add_chapter(&book_id, "Constructs", None).unwrap();
+    let resource = book.spine.last().unwrap().resource.clone();
+    let book = session.add_chapter(&book_id, "Target", None).unwrap();
+    let target = book.spine.last().unwrap().resource.clone();
+    let target_path = book
+        .resources
+        .iter()
+        .find(|r| r.id == target)
+        .unwrap()
+        .path
+        .clone();
+    let target_name = target_path.rsplit('/').next().unwrap();
+    session
+        .write_chapter(
+            &book_id,
+            &target,
+            ChapterContent {
+                resource: target.clone(),
+                format: ContentFormat::Markdown,
+                content: "# Target {#x}\n".into(),
+                fallback_reason: None,
+            },
+        )
+        .unwrap();
+    session
+        .add_resource(&book_id, "pixel.png", "image/png", PNG_1X1.to_vec())
+        .unwrap();
+    let md = [
+        include_str!("fixtures/roundtrip/016-heading-id.md"),
+        include_str!("fixtures/roundtrip/017-link-image-title.md"),
+        include_str!("fixtures/roundtrip/018-table-alignment.md"),
+        include_str!("fixtures/roundtrip/019-alerts.md"),
+        include_str!("fixtures/roundtrip/020-task-list.md"),
+        include_str!("fixtures/roundtrip/021-footnote-multiblock.md"),
+        include_str!("fixtures/roundtrip/022-empty-paragraph.md"),
+        include_str!("fixtures/roundtrip/023-autolinks.md"),
+    ]
+    .join("\n\n")
+    .replace("../text/ch02.xhtml", target_name)
+    .replace("../images/cover.png", "images/pixel.png");
+    session
+        .write_chapter(
+            &book_id,
+            &resource,
+            ChapterContent {
+                resource: resource.clone(),
+                format: ContentFormat::Markdown,
+                content: md,
+                fallback_reason: None,
+            },
+        )
+        .unwrap();
+    assert!(session.validate(&book_id).unwrap().is_empty());
+    let doc = String::from_utf8(session.read_resource(&book_id, &resource).unwrap()).unwrap();
+    assert!(doc.contains("xmlns:epub=\"http://www.idpf.org/2007/ops\""));
+    let read = session
+        .read_chapter(&book_id, &resource, ContentFormat::Markdown)
+        .unwrap();
+    assert_eq!(read.format, ContentFormat::Markdown);
+    let path = fixtures_dir().join("conversion-standard.epub");
+    session
+        .save_book(&book_id, Some(path.to_string_lossy().into_owned()))
+        .unwrap();
+    let reopened = session.open_book(&path).unwrap();
+    assert!(session.validate(&reopened.id).unwrap().is_empty());
+    let reread = session
+        .read_chapter(&reopened.id, &resource, ContentFormat::Markdown)
+        .unwrap();
+    assert_eq!(reread.format, ContentFormat::Markdown);
+    assert_eq!(reread.content, read.content);
+    assert_eq!(
+        session.read_resource(&reopened.id, &resource).unwrap(),
+        doc.as_bytes()
+    );
+}
+
+/// Missing chapter links are warnings; external URLs, local fragments and
+/// query strings must not produce false missing-manifest findings.
+#[test]
+fn relative_anchor_validation_warns_only_for_missing_path_targets() {
+    use epubzilla_core::Severity;
+    let mut session = Session::new();
+    let book = session.create_book(Metadata {
+        title: "Link validation".into(),
+        authors: vec![],
+        language: "en".into(),
+        identifier: String::new(),
+        modified: None,
+        description: None,
+        publisher: None,
+        cover_resource: None,
+    });
+    let book_id = book.id.clone();
+    let resource = book.spine[0].resource.clone();
+    let path = book
+        .resources
+        .iter()
+        .find(|r| r.id == resource)
+        .unwrap()
+        .path
+        .clone();
+    let name = path.rsplit('/').next().unwrap();
+    let md = format!("# Target {{#x}}\n\n[Missing](missing.xhtml?view=1#x) [Local](#x) [Query](?view=1) [Existing]({name}?view=1#x) [External](https://example.com) [Protocol](//example.com/path) [Mail](mailto:a@example.com)\n");
+    session
+        .write_chapter(
+            &book_id,
+            &resource,
+            ChapterContent {
+                resource: resource.clone(),
+                format: ContentFormat::Markdown,
+                content: md,
+                fallback_reason: None,
+            },
+        )
+        .unwrap();
+    let issues = session.validate(&book_id).unwrap();
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(issues[0].severity, Severity::Warning);
+    assert_eq!(issues[0].location.as_deref(), Some(path.as_str()));
+    assert!(issues[0].message.contains("missing.xhtml"));
+    assert!(!issues[0].message.contains("view="));
+}

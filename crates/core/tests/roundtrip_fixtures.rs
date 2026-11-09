@@ -47,8 +47,8 @@ fn paired_fixtures_convert_both_ways_and_round_trip() {
         .collect();
     md_files.sort();
     assert!(
-        md_files.len() >= 14,
-        "expected at least 14 paired fixtures, found {}",
+        md_files.len() >= 23,
+        "expected at least 23 paired fixtures, found {}",
         md_files.len()
     );
 
@@ -98,8 +98,8 @@ fn bad_fixtures_are_rejected() {
         .collect();
     bad_files.sort();
     assert!(
-        bad_files.len() >= 4,
-        "expected at least 4 negative fixtures, found {}",
+        bad_files.len() >= 20,
+        "expected at least 20 negative fixtures, found {}",
         bad_files.len()
     );
 
