@@ -24,6 +24,13 @@ tauri-plugin-dialog = "2.7.2"
 tauri-plugin-updater = "=2.10.1"
 tauri-plugin-opener = "=2.5.4"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Native sheet / modal detection for the quit-acknowledgement timeout, and
+# the ⌘Q key monitor that keeps Quit working with a hung webview.
+objc2 = "0.6"
+block2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSApplication", "NSEvent", "NSResponder", "NSWindow"] }
+
 [dev-dependencies]
 # Fixture generation for the frontend integration harness (tests/gen_fixtures.rs).
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
