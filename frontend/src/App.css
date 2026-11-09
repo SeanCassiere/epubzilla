@@ -889,3 +889,14 @@ body.sidebar-resizing .chapter-frame {
 .milkdown-host .ProseMirror li[data-checked="true"] {
   list-style-type: "☑  ";
 }
+
+.prompt-dialog-label {
+  display: block;
+  margin-bottom: 0.5rem;
+}
+
+.prompt-dialog-input {
+  box-sizing: border-box;
+  width: 100%;
+  margin-bottom: 1rem;
+}

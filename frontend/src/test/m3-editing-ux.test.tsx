@@ -8,7 +8,7 @@
 // the WYSIWYG mock renders the "Insert image…" toolbar button. The dialog
 // module is mocked with queue-driven pickers (m2-save pattern).
 
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
   fireEvent,
@@ -195,7 +195,14 @@ const buffer = () =>
 const cmdIndex = (calls: InvokeCall[], cmd: string) =>
   calls.findIndex((c) => c.cmd === cmd);
 
-beforeEach(() => { vi.spyOn(window, "prompt").mockReturnValue(""); });
+async function answerAlt(value: string | null = "") {
+  const input = await screen.findByRole("textbox", { name: /Alt text/ });
+  if (value === null) fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  else {
+    fireEvent.change(input, { target: { value } });
+    fireEvent.click(screen.getByRole("button", { name: "OK" }));
+  }
+}
 
 beforeAll(() => {
   window.HTMLElement.prototype.scrollIntoView ??= () => undefined;
@@ -395,6 +402,7 @@ describe("image insertion", () => {
 
     imagePicks.push("/photos/Sünset.png");
     fireEvent.click(screen.getByRole("button", { name: "Insert image…" }));
+    await answerAlt("");
 
     await waitFor(() =>
       expect(cmdIndex(calls, "add_resource_from_path")).not.toBe(-1),
@@ -421,29 +429,28 @@ describe("image insertion", () => {
 
     imagePicks.push("/photos/pic.jpg");
     fireEvent.click(screen.getByRole("button", { name: "Insert image…" }));
+    await answerAlt("");
     await waitFor(() =>
       expect(buffer().value).toContain("![](../images/inserted-1.png)"),
     );
   });
 
   it.each(["WYSIWYG", "Markdown"])("%s asks for descriptive alt text", async (mode) => {
-    vi.mocked(window.prompt).mockReturnValue("Sunset [west]");
     const calls = mockBackend({ ch1: MD });
     await openFixtureAndEdit(calls);
     fireEvent.click(screen.getByRole("button", { name: mode }));
     imagePicks.push("/photos/sunset.png");
     fireEvent.click(screen.getByRole("button", { name: "Insert image…" }));
+    await answerAlt("Sunset [west]");
     await waitFor(() => expect(buffer().value).toContain(imageMarkdown("../images/inserted-1.png", "Sunset [west]")));
-    expect(window.prompt).toHaveBeenCalledWith(expect.stringContaining("leave empty for a decorative image"), "");
   });
 
   it("cancelling alt text leaves the book and buffer untouched", async () => {
-    vi.mocked(window.prompt).mockReturnValue(null);
     const calls = mockBackend({ ch1: MD });
     await openFixtureAndEdit(calls);
     imagePicks.push("/photos/sunset.png");
     fireEvent.click(screen.getByRole("button", { name: "Insert image…" }));
-    await waitFor(() => expect(window.prompt).toHaveBeenCalled());
+    await answerAlt(null);
     expect(calls.some((c) => c.cmd === "add_resource_from_path")).toBe(false);
     expect(buffer().value).toBe(MD);
   });

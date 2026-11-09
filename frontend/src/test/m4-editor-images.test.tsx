@@ -17,8 +17,8 @@
 // parse/serialize (also pinned below), but rendered invisibly because
 // its relative src could not load.
 
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { MutableRefObject } from "react";
 import { createRef } from "react";
 import { editorViewCtx, type Editor } from "@milkdown/kit/core";
@@ -26,7 +26,14 @@ import { Slice } from "@milkdown/kit/prose/model";
 import { getMarkdown } from "@milkdown/kit/utils";
 import { MilkdownEditor, type PastedImage } from "../components/MilkdownEditor";
 
-beforeEach(() => { vi.spyOn(window, "prompt").mockReturnValue(""); });
+async function answerAlt(value: string | null = "") {
+  const input = await screen.findByRole("textbox", { name: /Alt text/ });
+  if (value === null) fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  else {
+    fireEvent.change(input, { target: { value } });
+    fireEvent.click(screen.getByRole("button", { name: "OK" }));
+  }
+}
 
 beforeAll(() => {
   // jsdom lacks layout; ProseMirror needs these to mount.
@@ -195,6 +202,7 @@ describe("pasted image persistence (#54)", () => {
       pasteEvent({ files: [pngFile("shot.png")] }),
     );
 
+    await answerAlt();
     await waitFor(() =>
       expect(latest).toContain("![](../images/pasted-image.png)"),
     );
@@ -212,18 +220,17 @@ describe("pasted image persistence (#54)", () => {
   });
 
   it("asks for alt text on paste and preserves it in the image node", async () => {
-    vi.mocked(window.prompt).mockReturnValue("Pasted [diagram]");
     await mount("Text.\n", { onPasteImage: async () => "../images/pasted.png" });
     proseMirrorHost().dispatchEvent(pasteEvent({ files: [pngFile("shot.png")] }));
+    await answerAlt("Pasted [diagram]");
     await waitFor(() => expect(hostImg()?.alt).toBe("Pasted [diagram]"));
   });
 
   it("cancelling alt text skips persistence and insertion", async () => {
-    vi.mocked(window.prompt).mockReturnValue(null);
     const onPasteImage = vi.fn(async () => "../images/pasted.png");
     await mount("Text.\n", { onPasteImage });
     proseMirrorHost().dispatchEvent(pasteEvent({ files: [pngFile("shot.png")] }));
-    await waitFor(() => expect(window.prompt).toHaveBeenCalled());
+    await answerAlt(null);
     expect(onPasteImage).not.toHaveBeenCalled();
     expect(hostImg()).toBeNull();
   });
@@ -263,6 +270,7 @@ describe("pasted image persistence (#54)", () => {
       pasteEvent({ files: [pngFile("bad.png")] }),
     );
 
+    await answerAlt();
     await waitFor(() => expect(onPasteImage).toHaveBeenCalledTimes(1));
     expect(editor.action(getMarkdown())).not.toContain("![");
   });
@@ -290,6 +298,7 @@ describe("pasted image persistence (#54)", () => {
     );
     expect(handled).toBe(true);
 
+    await answerAlt();
     await waitFor(() => expect(latest).toContain("![](../images/dropped.png)"));
     expect(latest).not.toMatch(/blob:|data:|epub:\/\//);
     expect(hostImg()!.getAttribute("src")).toBe(

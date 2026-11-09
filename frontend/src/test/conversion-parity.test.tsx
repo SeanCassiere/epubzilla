@@ -7,9 +7,11 @@ import { createRef } from "react";
 import { CodeEditor } from "../components/CodeEditor";
 import { imageMarkdown, type InsertImage } from "../lib/editing";
 import { EditorView } from "@codemirror/view";
+import { TextSelection } from "@milkdown/kit/prose/state";
 import { DOMParser as ProseDOMParser } from "@milkdown/kit/prose/model";
 import { EditorPane } from "../components/EditorPane";
 import * as api from "../lib/api";
+import { pickImageFile } from "../lib/dialog";
 import { MilkdownEditor } from "../components/MilkdownEditor";
 
 const reader = vi.hoisted(() => ({
@@ -21,6 +23,7 @@ const reader = vi.hoisted(() => ({
   addResource: vi.fn(), addResourceBytes: vi.fn(),
 }));
 vi.mock("../state/reader", () => ({ useReader: () => reader, describeError: String }));
+vi.mock("../lib/dialog", () => ({ pickImageFile: vi.fn() }));
 vi.mock("../lib/api", () => ({ readChapter: vi.fn(), resourceUrl: () => "epub://book-1/" }));
 
 beforeAll(() => {
@@ -36,6 +39,17 @@ afterEach(() => {
 });
 
 const corpus: Record<string, string> = {
+  "review-attributes": "## T {#chapter_one .some_class}\n\n## Stars {#a*b}\n\n## Entity {#a&copy;}\n\n{.lead_x}\n\nBody.\n",
+  "review-alerts": "> [!note]  \n> Body\n\n> [!WARNING] \n> ---\n\n> [!TIP]\n> ===\n\n> [!caution]\t\n",
+  "review-list-fillers": "- > Quote\n\n- > [!NOTE]\n  > Alert\n\n- ```js\n  code\n  ```\n",
+  "review-empty-table": "| A | |\n| --- | --- |\n| | B |\n",
+  "review-inline-breaks": "Text **<br />** more\n\n# <br />\n\n*<br />*\n\n[<br />](u)\n\n| A |\n| --- |\n| <br /> |\n",
+  "review-empty-tasks": "- [x] \n- [ ] \n",
+  "review-empty-task-newline": "- [X]\n- [ ]\n",
+  "review-authored-nested-empty": "- <br />\n\n  > Quote\n\n> [!NOTE]\n>\n> <br />\n\nNote[^empty].\n\n[^empty]: <br />\n",
+  "review-setext-attributes": "> [!NOTE]\n> **Title** {#chapter_one .some_class}\n> ---\n\nOther {#a&copy;}\n===\n",
+  "review-nested-attributes": "> ## **Title** {#my_id .some_class}\n\n- ## Other {#a&copy;}\n",
+
   "016-heading-id": "## T {#id .c}\n\n### Other {#other}\n",
   "017-link-image-title": '[t](https://example.org/a?q=1&b=2#x "T")\n\n[next](../text/ch02.xhtml#x "Next") [local](#id) [mail](mailto:a@b.c)\n\n![a](../images/a.png "Picture")\n',
   "018-table-alignment": "| Left | Center | Right | Default |\n| :--- | :---: | ---: | --- |\n| a | b | c | d |\n",
@@ -67,6 +81,47 @@ function assertConstructs(name: string, out: string, original: string) {
   // would demote supported syntax (including in future shared C1 fixtures).
   for (const pattern of [/\\\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/g, /\\\{#/g, /\\\[x\]/g]) {
     expect(out.match(pattern)?.length ?? 0).toBeLessThanOrEqual(original.match(pattern)?.length ?? 0);
+  }
+  if (name === "review-attributes") {
+    for (const literal of ["{#chapter_one .some_class}", "{#a*b}", "{#a&copy;}", "{.lead_x}"]) expect(out).toContain(literal);
+  }
+  if (name === "review-alerts") {
+    for (const kind of ["NOTE", "WARNING", "TIP", "CAUTION"]) expect(out).toContain(`> [!${kind}]`);
+    expect(out).toContain("> ***");
+    expect(document.querySelector('blockquote[data-kind="tip"] .editor-alert-body')?.textContent).toBe("===");
+    expect(out).not.toContain("<br />");
+    expect(document.querySelectorAll("blockquote[data-kind]")).toHaveLength(4);
+  }
+  if (name === "review-list-fillers") {
+    expect(out).not.toContain("<br />");
+    expect(out).toContain("> Quote");
+    expect(out).toContain("> [!NOTE]");
+    expect(out).toContain("```js");
+  }
+  if (name === "review-authored-nested-empty") {
+    expect(out.match(/<br \/>/g)).toHaveLength(3);
+    expect(out).toContain("> Quote");
+  }
+  if (name === "review-setext-attributes") {
+    expect(out).toContain("**Title** {#chapter_one .some_class}");
+    expect(out).toContain("{#a&copy;}");
+    expect(out).toContain("> [!NOTE]");
+  }
+  if (name === "review-nested-attributes") {
+    expect(out).toContain("**Title** {#my_id .some_class}");
+    expect(out).toContain("{#a&copy;}");
+  }
+  if (name === "review-empty-table") expect(out).not.toContain("<br");
+  if (name === "review-inline-breaks") {
+    for (const literal of ["Text **<br />** more", "# <br />", "*<br />*", "[<br />](u)"]) expect(out).toContain(literal);
+    expect(out.match(/<br \/>/g)).toHaveLength(5);
+  }
+  if (name.startsWith("review-empty-task")) {
+    expect(out).toMatch(/^[*-] \[x\] /m);
+    expect(out).toMatch(/^[*-] \[ \] /m);
+    expect(out).not.toContain("<br />");
+    expect(document.querySelectorAll('li[data-item-type="task"][data-checked="true"]')).toHaveLength(1);
+    expect(document.querySelectorAll('li[data-item-type="task"][data-checked="false"]')).toHaveLength(1);
   }
   if (name === "016-heading-id") {
     expect(out).toContain("## T {#id .c}");
@@ -145,6 +200,7 @@ describe("rich representations", () => {
   it.each([
     "> \\[!NOTE]\n> Literal", "> &#91;!NOTE]\n> Literal",
     "> [!UNKNOWN]\n> Literal", "> `[!NOTE]`\n> Literal",
+    ">  [!NOTE]\n> Literal", ">     [!NOTE]\n> Literal",
     "> [!NOTE] ordinary text", "> [!NOTE]**bold**",
     "> First paragraph.\n>\n> [!NOTE]\n> Literal",
   ])("keeps ordinary blockquotes ordinary: %s", async (markdown) => {
@@ -237,5 +293,78 @@ describe("image syntax in both real editors", () => {
     expect(document.querySelector<HTMLImageElement>(".milkdown-host img")!.getAttribute("src")).toBe(src);
     expect(document.querySelector<HTMLImageElement>(".milkdown-host img")!.alt).toBe(alt);
     expect(editor.action(getMarkdown())).toBe(out);
+  });
+});
+
+
+describe("app-owned prompts in the real editor", () => {
+  it.each(["wysiwyg", "source"])("inserts an image through the %s dialog and retains alt text after another rich edit", async (mode) => {
+    vi.mocked(api.readChapter).mockResolvedValue({ resource: "ch1", format: "Markdown", content: "Before.\n" });
+    vi.mocked(pickImageFile).mockResolvedValue("/photos/diagram.png");
+    reader.addResource.mockResolvedValue({ ...reader.book, resources: [...reader.book.resources, { id: "img1", path: "OEBPS/images/diagram.png" }] });
+    sessionStorage.setItem("epubzilla.editor.markdownMode", mode);
+    const pane = render(<EditorPane />);
+    await waitFor(() => expect(document.querySelector(mode === "source" ? ".cm-editor" : ".milkdown-host .ProseMirror")).not.toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Insert image…" }));
+    const input = await screen.findByRole("textbox", { name: /Alt text/ });
+    expect(document.activeElement).toBe(input);
+    expect(reader.addResource).not.toHaveBeenCalled();
+    const alt = mode === "source" ? "" : "A [diagram] &copy;";
+    fireEvent.change(input, { target: { value: alt } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(reader.writeChapter).toHaveBeenCalled());
+    const saved = (reader.writeChapter.mock.calls as unknown as [{ content: string }][])[0][0].content;
+    pane.unmount();
+    const { editor } = await mount(saved);
+    const view = editor.ctx.get(editorViewCtx);
+    view.dispatch(view.state.tr.insert(0, view.state.schema.nodes.paragraph.create(null, view.state.schema.text("Unrelated edit."))));
+    const out = editor.action(getMarkdown());
+    editor.action(replaceAll(out));
+    expect(editor.action(getMarkdown())).toBe(out);
+    expect(document.querySelector<HTMLImageElement>(".milkdown-host img")?.alt).toBe(alt);
+    expect(out).toContain("../images/diagram.png");
+  });
+
+  it("opens the link dialog, traps focus, submits with Enter, and preserves the selection", async () => {
+    const { editor } = await mount("Link text.\n");
+    const view = editor.ctx.get(editorViewCtx);
+    act(() => {
+      view.focus();
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1, 5)));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Link (toggles on the selection)" }));
+    const input = await screen.findByRole("textbox", { name: "Link target (href)" });
+    expect(document.activeElement).toBe(input);
+    expect(screen.getByRole("dialog").getAttribute("aria-modal")).toBe("true");
+    fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+    const ok = screen.getByRole("button", { name: "OK" });
+    expect(document.activeElement).toBe(ok);
+    expect(ok.getAttribute("data-variant")).toBe("primary");
+    fireEvent.keyDown(ok, { key: "Tab" });
+    expect(document.activeElement).toBe(input);
+    fireEvent.change(input, { target: { value: "https://example.org" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(editor.action(getMarkdown())).toContain("[Link](https://example.org) text."));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(view.dom);
+    // The inserted link must also survive an unrelated edit and reparse.
+    view.dispatch(view.state.tr.insert(view.state.doc.content.size, view.state.schema.nodes.paragraph.create(null, view.state.schema.text("Unrelated edit."))));
+    const out = editor.action(getMarkdown());
+    editor.action(replaceAll(out));
+    expect(editor.action(getMarkdown())).toBe(out);
+    expect(out).toContain("[Link](https://example.org)");
+  });
+
+  it("Escape cancels the link dialog without changing the document", async () => {
+    const { editor, onChange } = await mount("Original.\n");
+    fireEvent.click(screen.getByRole("button", { name: "Link (toggles on the selection)" }));
+    const input = await screen.findByRole("textbox", { name: "Link target (href)" });
+    fireEvent.change(input, { target: { value: "https://example.org" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(editor.action(getMarkdown())).toBe("Original.\n");
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

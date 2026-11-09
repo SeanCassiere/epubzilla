@@ -42,11 +42,12 @@ import {
 import { history } from "@milkdown/kit/plugin/history";
 import { listener, listenerCtx } from "@milkdown/kit/plugin/listener";
 import { callCommand, getMarkdown, replaceAll } from "@milkdown/kit/utils";
-import { promptImageAlt, type InsertImage } from "../lib/editing";
+import type { InsertImage } from "../lib/editing";
 import {
   configureConversionSchemas,
   remarkConversion,
 } from "../lib/milkdown-conversion";
+import { useTextPrompt } from "./PromptDialog";
 
 /**
  * An image arriving via clipboard paste or drag-and-drop (issue #54): the
@@ -129,15 +130,6 @@ const TOOLBAR: ToolbarAction[] = [
     run: (e) => e.action(callCommand(createCodeBlockCommand.key)),
   },
   {
-    label: "Link",
-    title: "Link (toggles on the selection)",
-    run: (e) => {
-      const href = window.prompt("Link target (href):", "");
-      if (href === null || href === "") return;
-      e.action(callCommand(toggleLinkCommand.key, { href }));
-    },
-  },
-  {
     label: "Table",
     title: "Insert table",
     run: (e) => e.action(callCommand(insertTableCommand.key)),
@@ -191,6 +183,7 @@ export function MilkdownEditor({
    */
   onPasteImage?: (image: PastedImage) => Promise<string | null>;
 }) {
+  const { prompt, promptImageAlt, dialog } = useTextPrompt();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<Editor | null>(null);
   const onChangeRef = useRef(onChange);
@@ -216,7 +209,7 @@ export function MilkdownEditor({
         } catch {
           continue; // unreadable payload: skip it, keep the rest
         }
-        const alt = promptImageAlt();
+        const alt = await promptImageAlt();
         if (alt === null) continue;
         const src = await handler({
           name: file.name,
@@ -324,12 +317,12 @@ export function MilkdownEditor({
           },
         }));
       })
+      .use(remarkConversion)
       .use(commonmark.filter(
         (plugin) => plugin !== remarkPreserveEmptyLinePlugin.plugin &&
           plugin !== remarkPreserveEmptyLinePlugin.options,
       ))
       .use(gfm)
-      .use(remarkConversion)
       .use(history)
       .use(listener);
     void editor.create().then(() => {
@@ -404,6 +397,21 @@ export function MilkdownEditor({
             {action.label}
           </button>
         ))}
+        <button
+          type="button"
+          title="Link (toggles on the selection)"
+          aria-label="Link (toggles on the selection)"
+          onMouseDown={(event) => event.preventDefault() /* keep the selection */}
+          onClick={() => {
+            void (async () => {
+              const href = await prompt("Link target", "Link target (href)");
+              const editor = editorRef.current;
+              if (editor && href) editor.action(callCommand(toggleLinkCommand.key, { href }));
+            })();
+          }}
+        >
+          Link
+        </button>
         {onInsertImage !== undefined && (
           <button
             type="button"
@@ -416,6 +424,7 @@ export function MilkdownEditor({
         )}
       </div>
       <div className="milkdown-host" ref={hostRef} />
+      {dialog}
     </div>
   );
 }
