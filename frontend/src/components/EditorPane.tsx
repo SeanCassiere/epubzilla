@@ -17,7 +17,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ContentFormat } from "@bindings/ContentFormat";
 import { useReader, describeError } from "../state/reader";
 import * as api from "../lib/api";
-import { imageMarkdown, relativeResourcePath } from "../lib/editing";
+import {
+  imageMarkdown,
+  promptImageAlt,
+  relativeResourcePath,
+  type InsertImage,
+} from "../lib/editing";
 import { resolveChapterUrl } from "../lib/chapter";
 import { pickImageFile } from "../lib/dialog";
 import { CodeEditor } from "./CodeEditor";
@@ -174,7 +179,7 @@ export function EditorPane() {
   // Insert-image plumbing (M3.3): the active surface registers a
   // cursor-aware inserter; picking a file adds the resource to the book
   // and drops a Markdown image reference into the buffer.
-  const insertImageRef = useRef<((src: string) => void) | null>(null);
+  const insertImageRef = useRef<InsertImage | null>(null);
 
   // Zip-relative ref (from this chapter) to the ONE resource in `updated`
   // that `known` did not contain — the image an add_resource call just
@@ -196,6 +201,8 @@ export function EditorPane() {
     if (book === null || resourceId === null) return;
     const osPath = await pickImageFile();
     if (osPath === null) return;
+    const alt = promptImageAlt();
+    if (alt === null) return;
     const known = new Set(book.resources.map((r) => r.id));
     const updated = await addResource(osPath);
     if (updated === null) return;
@@ -203,13 +210,13 @@ export function EditorPane() {
     if (reference === null) return;
     const insert = insertImageRef.current;
     if (insert !== null) {
-      insert(reference);
+      insert(reference, alt);
     } else {
       // Surface not ready: append at the end rather than dropping the ref.
       setBuffer((current) =>
         current === null
           ? current
-          : `${current}\n\n${imageMarkdown(reference)}\n`,
+          : `${current}\n\n${imageMarkdown(reference, alt)}\n`,
       );
     }
   }, [book, resourceId, addResource, referenceForAdded]);

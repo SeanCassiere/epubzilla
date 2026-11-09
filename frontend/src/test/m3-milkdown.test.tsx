@@ -3,14 +3,9 @@
 // Unlike the integration tests (which vi.mock the editor surfaces), this
 // file mounts the actual Milkdown editor under jsdom — ProseMirror works
 // there with the layout stubs below — and pins down what parse+serialize
-// does to buffers. The load-bearing verdict: Pandoc-style footnotes and
-// {.class} annotations (contract syntax Milkdown does NOT model —
-// docs/contracts/content-roundtrip.md) pass through the serializer
-// VERBATIM as literal text. Nothing is escaped or lost, so EditorPane can
-// offer WYSIWYG for such chapters (ADR-0007 consequence: they render as
-// literal syntax, editable, still round-tripping via the core). If a
-// Milkdown upgrade breaks this test, WYSIWYG must be gated off for such
-// content instead.
+// does to buffers. GFM models footnotes as references and definition nodes;
+// class annotations remain literal text. The broader conversion parity
+// corpus also checks preservation after an unrelated edit.
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
@@ -106,11 +101,9 @@ describe("Milkdown markdown round-trip", () => {
     expect(await roundTrip(out)).toBe(out);
   });
 
-  it("passes footnotes and {.class} annotations through verbatim", async () => {
-    // Milkdown has no footnote/attribute syntax; it treats these as plain
-    // text — and, verified here, its serializer does NOT escape or mangle
-    // them. They render as literal text in WYSIWYG (documented ADR-0007
-    // consequence) and survive Apply byte-for-byte.
+  it("preserves footnote nodes and literal {.class} annotations", async () => {
+    // GFM note nodes and literal class annotations serialize to the
+    // contract syntax; neither may be escaped into ordinary prose.
     const md = "A claim.[^1]\n\n[^1]: The footnote.\n\nPara. {.lead}\n";
     const out = await roundTrip(md);
     expect(out).toContain("A claim.[^1]");

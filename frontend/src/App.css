@@ -868,3 +868,24 @@ body.sidebar-resizing .chapter-frame {
   font-size: 0.8rem;
   opacity: 0.6;
 }
+
+/* Conversion extensions use the editor's existing system colour palette. */
+.milkdown-host .ProseMirror blockquote[data-kind] {
+  border-left-color: Highlight;
+  background: color-mix(in srgb, currentColor 5%, transparent);
+  padding: 0.5rem 0.9rem;
+  opacity: 1;
+}
+
+.editor-alert-label {
+  font-weight: 600;
+  color: LinkText;
+}
+
+.milkdown-host .ProseMirror li[data-item-type="task"] {
+  list-style-type: "☐  ";
+}
+
+.milkdown-host .ProseMirror li[data-checked="true"] {
+  list-style-type: "☑  ";
+}

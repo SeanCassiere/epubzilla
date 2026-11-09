@@ -8,7 +8,7 @@
 // the WYSIWYG mock renders the "Insert image…" toolbar button. The dialog
 // module is mocked with queue-driven pickers (m2-save pattern).
 
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
   fireEvent,
@@ -45,7 +45,7 @@ vi.mock("../lib/dialog", async (importOriginal) => {
   };
 });
 
-type InsertRef = MutableRefObject<((src: string) => void) | null> | undefined;
+type InsertRef = MutableRefObject<((src: string, alt?: string) => void) | null> | undefined;
 
 interface SurfaceProps {
   value: string;
@@ -58,8 +58,8 @@ interface SurfaceProps {
 vi.mock("../components/CodeEditor", () => ({
   CodeEditor: ({ value, language, onChange, insertImageRef }: SurfaceProps) => {
     if (insertImageRef !== undefined && insertImageRef !== null) {
-      insertImageRef.current = (src: string) =>
-        onChange(`${value}${imageMarkdown(src)}`);
+      insertImageRef.current = (src: string, alt = "") =>
+        onChange(`${value}${imageMarkdown(src, alt)}`);
     }
     return (
       <textarea
@@ -81,8 +81,8 @@ vi.mock("../components/MilkdownEditor", () => ({
     onInsertImage,
   }: SurfaceProps) => {
     if (insertImageRef !== undefined && insertImageRef !== null) {
-      insertImageRef.current = (src: string) =>
-        onChange(`${value}${imageMarkdown(src)}`);
+      insertImageRef.current = (src: string, alt = "") =>
+        onChange(`${value}${imageMarkdown(src, alt)}`);
     }
     return (
       <div role="toolbar" aria-label="Formatting">
@@ -195,11 +195,14 @@ const buffer = () =>
 const cmdIndex = (calls: InvokeCall[], cmd: string) =>
   calls.findIndex((c) => c.cmd === cmd);
 
+beforeEach(() => { vi.spyOn(window, "prompt").mockReturnValue(""); });
+
 beforeAll(() => {
   window.HTMLElement.prototype.scrollIntoView ??= () => undefined;
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   cleanup();
   clearMocks();
   sessionStorage.clear();
@@ -421,6 +424,28 @@ describe("image insertion", () => {
     await waitFor(() =>
       expect(buffer().value).toContain("![](../images/inserted-1.png)"),
     );
+  });
+
+  it.each(["WYSIWYG", "Markdown"])("%s asks for descriptive alt text", async (mode) => {
+    vi.mocked(window.prompt).mockReturnValue("Sunset [west]");
+    const calls = mockBackend({ ch1: MD });
+    await openFixtureAndEdit(calls);
+    fireEvent.click(screen.getByRole("button", { name: mode }));
+    imagePicks.push("/photos/sunset.png");
+    fireEvent.click(screen.getByRole("button", { name: "Insert image…" }));
+    await waitFor(() => expect(buffer().value).toContain(imageMarkdown("../images/inserted-1.png", "Sunset [west]")));
+    expect(window.prompt).toHaveBeenCalledWith(expect.stringContaining("leave empty for a decorative image"), "");
+  });
+
+  it("cancelling alt text leaves the book and buffer untouched", async () => {
+    vi.mocked(window.prompt).mockReturnValue(null);
+    const calls = mockBackend({ ch1: MD });
+    await openFixtureAndEdit(calls);
+    imagePicks.push("/photos/sunset.png");
+    fireEvent.click(screen.getByRole("button", { name: "Insert image…" }));
+    await waitFor(() => expect(window.prompt).toHaveBeenCalled());
+    expect(calls.some((c) => c.cmd === "add_resource_from_path")).toBe(false);
+    expect(buffer().value).toBe(MD);
   });
 
   it("cancelling the picker adds nothing", async () => {
